@@ -52,6 +52,18 @@ inference:
       keys: ["image"]
     - _target_: src.transforms.ConvertToMultiChannelBasedOnBratsClassesd
       keys: ["label"]
+    - _target_: monai.transforms.CropForegroundd
+      keys: ["image", "label"]
+      source_key: "image"
+      k_divisible: [32, 32, 32]
+      allow_smaller: True
+    - _target_: monai.transforms.SpatialPadd
+      keys: ["image", "label"]
+      spatial_size: [96, 96, 96]
+      mode: constant
+    - _target_: monai.transforms.CenterSpatialCropd
+      keys: ["image", "label"]
+      roi_size: [96, 96, 96]
     - _target_: monai.transforms.NormalizeIntensityd
       keys: ["image"]
       nonzero: True
