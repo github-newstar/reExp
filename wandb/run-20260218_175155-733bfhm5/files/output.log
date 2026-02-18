@@ -1,0 +1,492 @@
+LMambaNet(
+  (enc1): DIDCBlock(
+    (proj): Sequential(
+      (0): Conv3d(4, 2, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(2, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (branch_a): Conv3d(2, 2, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), groups=2, bias=False)
+    (branch_b): Conv3d(2, 2, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(2, 2, 2), dilation=(2, 2, 2), groups=2, bias=False)
+    (branch_c): Conv3d(2, 2, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(3, 3, 3), dilation=(3, 3, 3), groups=2, bias=False)
+    (fuse): Sequential(
+      (0): Conv3d(6, 32, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (residual_proj): Sequential(
+      (0): Conv3d(4, 32, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+    )
+  )
+  (down1): Conv3d(32, 64, kernel_size=(3, 3, 3), stride=(2, 2, 2), padding=(1, 1, 1), bias=False)
+  (enc2): DIDCBlock(
+    (proj): Sequential(
+      (0): Conv3d(64, 32, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (branch_a): Conv3d(32, 32, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), groups=32, bias=False)
+    (branch_b): Conv3d(32, 32, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(2, 2, 2), dilation=(2, 2, 2), groups=32, bias=False)
+    (branch_c): Conv3d(32, 32, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(3, 3, 3), dilation=(3, 3, 3), groups=32, bias=False)
+    (fuse): Sequential(
+      (0): Conv3d(96, 64, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (residual_proj): Identity()
+  )
+  (down2): Conv3d(64, 128, kernel_size=(3, 3, 3), stride=(2, 2, 2), padding=(1, 1, 1), bias=False)
+  (enc3): DIDCBlock(
+    (proj): Sequential(
+      (0): Conv3d(128, 64, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (branch_a): Conv3d(64, 64, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), groups=64, bias=False)
+    (branch_b): Conv3d(64, 64, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(2, 2, 2), dilation=(2, 2, 2), groups=64, bias=False)
+    (branch_c): Conv3d(64, 64, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(3, 3, 3), dilation=(3, 3, 3), groups=64, bias=False)
+    (fuse): Sequential(
+      (0): Conv3d(192, 128, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(128, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (residual_proj): Identity()
+  )
+  (down3): Conv3d(128, 256, kernel_size=(3, 3, 3), stride=(2, 2, 2), padding=(1, 1, 1), bias=False)
+  (bottleneck): VSSBottleneck(
+    (norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+    (sequence_model): _GRUFallback(
+      (gru): GRU(256, 256, batch_first=True)
+    )
+  )
+  (up3): ConvTranspose3d(256, 128, kernel_size=(2, 2, 2), stride=(2, 2, 2))
+  (dec3): DIDCBlock(
+    (proj): Sequential(
+      (0): Conv3d(256, 128, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(128, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (branch_a): Conv3d(128, 128, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), groups=128, bias=False)
+    (branch_b): Conv3d(128, 128, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(2, 2, 2), dilation=(2, 2, 2), groups=128, bias=False)
+    (branch_c): Conv3d(128, 128, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(3, 3, 3), dilation=(3, 3, 3), groups=128, bias=False)
+    (fuse): Sequential(
+      (0): Conv3d(384, 128, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(128, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (residual_proj): Sequential(
+      (0): Conv3d(256, 128, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(128, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+    )
+  )
+  (up2): ConvTranspose3d(128, 64, kernel_size=(2, 2, 2), stride=(2, 2, 2))
+  (dec2): DIDCBlock(
+    (proj): Sequential(
+      (0): Conv3d(128, 64, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (branch_a): Conv3d(64, 64, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), groups=64, bias=False)
+    (branch_b): Conv3d(64, 64, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(2, 2, 2), dilation=(2, 2, 2), groups=64, bias=False)
+    (branch_c): Conv3d(64, 64, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(3, 3, 3), dilation=(3, 3, 3), groups=64, bias=False)
+    (fuse): Sequential(
+      (0): Conv3d(192, 64, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (residual_proj): Sequential(
+      (0): Conv3d(128, 64, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+    )
+  )
+  (up1): ConvTranspose3d(64, 32, kernel_size=(2, 2, 2), stride=(2, 2, 2))
+  (dec1): DIDCBlock(
+    (proj): Sequential(
+      (0): Conv3d(64, 32, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (branch_a): Conv3d(32, 32, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), groups=32, bias=False)
+    (branch_b): Conv3d(32, 32, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(2, 2, 2), dilation=(2, 2, 2), groups=32, bias=False)
+    (branch_c): Conv3d(32, 32, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(3, 3, 3), dilation=(3, 3, 3), groups=32, bias=False)
+    (fuse): Sequential(
+      (0): Conv3d(96, 32, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      (2): SiLU(inplace=True)
+    )
+    (residual_proj): Sequential(
+      (0): Conv3d(64, 32, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (1): InstanceNorm3d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+    )
+  )
+  (head): Conv3d(32, 3, kernel_size=(1, 1, 1), stride=(1, 1, 1))
+)
+train:  90%|█████████ | 9/10 [00:58<00:06,  6.56s/it]
+Train Epoch: 1 [0/10 (0%)] Loss: 0.999751
+val: 100%|██████████| 2/2 [00:03<00:00,  1.91s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.97s/it]
+    epoch          : 1
+    loss           : 0.9997506141662598
+    grad_norm      : 0.003470189869403839
+    TRAIN_MeanDice : 4.061575236846693e-05
+    val_loss       : 0.9310379326343536
+    val_MeanDice   : 0.06921328604221344
+    val_Dice_TC    : 0.058407969772815704
+    val_Dice_WT    : 0.14732001349329948
+    val_Dice_ET    : 0.0019118774812341144
+    test_loss      : 0.9436845183372498
+    test_MeanDice  : 0.05128820799291134
+    test_Dice_TC   : 0.05242212722077966
+    test_Dice_WT   : 0.10051938891410828
+    test_Dice_ET   : 0.0009231087051375653
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:58<00:06,  6.51s/it]
+Train Epoch: 2 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:03<00:00,  1.90s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.95s/it]
+    epoch          : 2
+    loss           : 1.0
+    grad_norm      : 8.686810819280577e-12
+    TRAIN_MeanDice : 1.6807623001713345e-11
+    val_loss       : 0.90593421459198
+    val_MeanDice   : 0.09676140546798706
+    val_Dice_TC    : 0.07072004768997431
+    val_Dice_WT    : 0.21629278734326363
+    val_Dice_ET    : 0.0032713811688154237
+    test_loss      : 0.9130471646785736
+    test_MeanDice  : 0.08357710391283035
+    test_Dice_TC   : 0.051453232765197754
+    test_Dice_WT   : 0.1959397904574871
+    test_Dice_ET   : 0.003338281523610931
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.24s/it]
+Train Epoch: 3 [0/10 (0%)] Loss: 0.998247
+val: 100%|██████████| 2/2 [00:03<00:00,  1.89s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.90s/it]
+    epoch          : 3
+    loss           : 0.9982471466064453
+    grad_norm      : 0.015383669175207615
+    TRAIN_MeanDice : 0.0012446901528164744
+    val_loss       : 0.9024242758750916
+    val_MeanDice   : 0.10882464982569218
+    val_Dice_TC    : 0.12117242394015193
+    val_Dice_WT    : 0.20450975745916367
+    val_Dice_ET    : 0.0007917617404018529
+    test_loss      : 0.9307106137275696
+    test_MeanDice  : 0.07321375049650669
+    test_Dice_TC   : 0.07064411509782076
+    test_Dice_WT   : 0.14785081893205643
+    test_Dice_ET   : 0.0011463293703855015
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:55<00:06,  6.16s/it]
+Train Epoch: 4 [0/10 (0%)] Loss: 0.870336
+val: 100%|██████████| 2/2 [00:03<00:00,  1.94s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.91s/it]
+    epoch          : 4
+    loss           : 0.8703363537788391
+    grad_norm      : 0.28502002358436584
+    TRAIN_MeanDice : 0.13885031640529633
+    val_loss       : 0.9480989873409271
+    val_MeanDice   : 0.0475524224457331
+    val_Dice_TC    : 0.010283575758876395
+    val_Dice_WT    : 0.12976422905921936
+    val_Dice_ET    : 0.0026094552724458854
+    test_loss      : 0.9286962747573853
+    test_MeanDice  : 0.07055136375129223
+    test_Dice_TC   : 0.04789259750396013
+    test_Dice_WT   : 0.16163259744644165
+    test_Dice_ET   : 0.0021288893030941836
+train:  90%|█████████ | 9/10 [00:55<00:06,  6.17s/it]
+Train Epoch: 5 [0/10 (0%)] Loss: 0.830982
+val: 100%|██████████| 2/2 [00:03<00:00,  1.95s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.92s/it]
+    epoch          : 5
+    loss           : 0.830981969833374
+    grad_norm      : 0.4682338237762451
+    TRAIN_MeanDice : 0.16149818897247314
+    val_loss       : 0.9499607086181641
+    val_MeanDice   : 0.04495606571435928
+    val_Dice_TC    : 0.022532389499247074
+    val_Dice_WT    : 0.11120571568608284
+    val_Dice_ET    : 0.0011300975529593416
+    test_loss      : 0.9333962798118591
+    test_MeanDice  : 0.08762238593772054
+    test_Dice_TC   : 0.022350980434566736
+    test_Dice_WT   : 0.23480452224612236
+    test_Dice_ET   : 0.005711651421405147
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.23s/it]
+Train Epoch: 6 [0/10 (0%)] Loss: 0.945582
+val: 100%|██████████| 2/2 [00:03<00:00,  1.89s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.89s/it]
+    epoch          : 6
+    loss           : 0.9455819129943848
+    grad_norm      : 0.20026688277721405
+    TRAIN_MeanDice : 0.046297892928123474
+    val_loss       : 0.9254087507724762
+    val_MeanDice   : 0.08685448579490185
+    val_Dice_TC    : 0.033246989361941814
+    val_Dice_WT    : 0.22438088431954384
+    val_Dice_ET    : 0.0029355897732245926
+    test_loss      : 0.9779126048088074
+    test_MeanDice  : 0.023240818176418543
+    test_Dice_TC   : 0.004670951748266816
+    test_Dice_WT   : 0.06386455334722996
+    test_Dice_ET   : 0.0011869538539031055
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.33s/it]
+Train Epoch: 7 [0/10 (0%)] Loss: 0.956501
+val: 100%|██████████| 2/2 [00:03<00:00,  1.96s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.99s/it]
+    epoch          : 7
+    loss           : 0.956500768661499
+    grad_norm      : 0.10067425668239594
+    TRAIN_MeanDice : 0.04032978042960167
+    val_loss       : 0.8826217353343964
+    val_MeanDice   : 0.15039650723338127
+    val_Dice_TC    : 0.05976283550262451
+    val_Dice_WT    : 0.3882257789373398
+    val_Dice_ET    : 0.0032009096757974476
+    test_loss      : 0.868486225605011
+    test_MeanDice  : 0.15994695387780666
+    test_Dice_TC   : 0.15695215668529272
+    test_Dice_WT   : 0.320676788687706
+    test_Dice_ET   : 0.002211916958913207
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:55<00:06,  6.13s/it]
+Train Epoch: 8 [0/10 (0%)] Loss: 0.900918
+val: 100%|██████████| 2/2 [00:03<00:00,  1.88s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.90s/it]
+    epoch          : 8
+    loss           : 0.9009183049201965
+    grad_norm      : 0.19164009392261505
+    TRAIN_MeanDice : 0.10677158832550049
+    val_loss       : 0.9005151987075806
+    val_MeanDice   : 0.14839597418904305
+    val_Dice_TC    : 0.061055466532707214
+    val_Dice_WT    : 0.3742927387356758
+    val_Dice_ET    : 0.009839715858106501
+    test_loss      : 0.9016331434249878
+    test_MeanDice  : 0.14256596937775612
+    test_Dice_TC   : 0.054761193692684174
+    test_Dice_WT   : 0.3660982549190521
+    test_Dice_ET   : 0.00683849849156104
+train:  90%|█████████ | 9/10 [00:57<00:06,  6.34s/it]
+Train Epoch: 9 [0/10 (0%)] Loss: 0.995948
+val: 100%|██████████| 2/2 [00:03<00:00,  1.83s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.86s/it]
+    epoch          : 9
+    loss           : 0.995948076248169
+    grad_norm      : 0.015896884724497795
+    TRAIN_MeanDice : 0.004449442494660616
+    val_loss       : 0.8372019529342651
+    val_MeanDice   : 0.2882802113890648
+    val_Dice_TC    : 0.30013832822442055
+    val_Dice_WT    : 0.5460656583309174
+    val_Dice_ET    : 0.018636657332535833
+    test_loss      : 0.9572419822216034
+    test_MeanDice  : 0.06695789098739624
+    test_Dice_TC   : 0.018520373618230224
+    test_Dice_WT   : 0.17085682787001133
+    test_Dice_ET   : 0.011496473137838796
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.30s/it]
+Train Epoch: 10 [0/10 (0%)] Loss: 0.728104
+val: 100%|██████████| 2/2 [00:03<00:00,  1.87s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.82s/it]
+    epoch          : 10
+    loss           : 0.7281044125556946
+    grad_norm      : 0.3994470536708832
+    TRAIN_MeanDice : 0.4044680595397949
+    val_loss       : 0.9448445439338684
+    val_MeanDice   : 0.0858459621667862
+    val_Dice_TC    : 0.05165109783411026
+    val_Dice_WT    : 0.19554246217012405
+    val_Dice_ET    : 0.010344329672989261
+    test_loss      : 0.8344298899173737
+    test_MeanDice  : 0.2997066229581833
+    test_Dice_TC   : 0.30523132532835007
+    test_Dice_WT   : 0.5691732168197632
+    test_Dice_ET   : 0.02471534366486594
+Saving checkpoint: /Users/shaw/aboutPaper/reExp/saved/lmambanet_ratio001_ep20/checkpoint-epoch10.pth ...
+train:  90%|█████████ | 9/10 [00:55<00:06,  6.16s/it]
+Train Epoch: 11 [0/10 (0%)] Loss: 0.999759
+val: 100%|██████████| 2/2 [00:03<00:00,  1.87s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.93s/it]
+    epoch          : 11
+    loss           : 0.9997590184211731
+    grad_norm      : 0.00035613897489383817
+    TRAIN_MeanDice : 0.00039741882937960327
+    val_loss       : 0.8514822721481323
+    val_MeanDice   : 0.23712486028671265
+    val_Dice_TC    : 0.16413724049925804
+    val_Dice_WT    : 0.5251110941171646
+    val_Dice_ET    : 0.022126251307781786
+    test_loss      : 0.9784651100635529
+    test_MeanDice  : 0.03499647043645382
+    test_Dice_TC   : 0.017206361866556108
+    test_Dice_WT   : 0.08573338389396667
+    test_Dice_ET   : 0.002049671398708597
+train:  90%|█████████ | 9/10 [00:58<00:06,  6.47s/it]
+Train Epoch: 12 [0/10 (0%)] Loss: 0.955544
+val: 100%|██████████| 2/2 [00:03<00:00,  1.85s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.90s/it]
+    epoch          : 12
+    loss           : 0.9555444121360779
+    grad_norm      : 0.0552523247897625
+    TRAIN_MeanDice : 0.05873219296336174
+    val_loss       : 0.9624258577823639
+    val_MeanDice   : 0.06371662300080061
+    val_Dice_TC    : 0.0340695409104228
+    val_Dice_WT    : 0.13688991405069828
+    val_Dice_ET    : 0.02019040207960643
+    test_loss      : 0.974576324224472
+    test_MeanDice  : 0.04831226618262008
+    test_Dice_TC   : 0.0667646974518047
+    test_Dice_WT   : 0.07759430492296815
+    test_Dice_ET   : 0.000577798435917376
+train:  90%|█████████ | 9/10 [00:54<00:06,  6.09s/it]
+Train Epoch: 13 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:03<00:00,  1.91s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.84s/it]
+    epoch          : 13
+    loss           : 1.0
+    grad_norm      : 1.0020860877202331e-11
+    TRAIN_MeanDice : 4.32319180454499e-11
+    val_loss       : 0.81581911444664
+    val_MeanDice   : 0.3182743564248085
+    val_Dice_TC    : 0.3296506144106388
+    val_Dice_WT    : 0.5836099982261658
+    val_Dice_ET    : 0.041562513913959265
+    test_loss      : 0.8221566081047058
+    test_MeanDice  : 0.3335486948490143
+    test_Dice_TC   : 0.35321085155010223
+    test_Dice_WT   : 0.6013627648353577
+    test_Dice_ET   : 0.04607246024534106
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:55<00:06,  6.18s/it]
+Train Epoch: 14 [0/10 (0%)] Loss: 0.899732
+val: 100%|██████████| 2/2 [00:03<00:00,  1.86s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.92s/it]
+    epoch          : 14
+    loss           : 0.8997319340705872
+    grad_norm      : 0.10637055337429047
+    TRAIN_MeanDice : 0.19843648374080658
+    val_loss       : 0.9948798418045044
+    val_MeanDice   : 0.009031964233145118
+    val_Dice_TC    : 0.003277282023600194
+    val_Dice_WT    : 0.023693416733294725
+    val_Dice_ET    : 0.0001251944661142708
+    test_loss      : 0.8744995296001434
+    test_MeanDice  : 0.23092845268547535
+    test_Dice_TC   : 0.2802453441545367
+    test_Dice_WT   : 0.40289074927568436
+    test_Dice_ET   : 0.009649272542446852
+train:  90%|█████████ | 9/10 [00:54<00:06,  6.11s/it]
+Train Epoch: 15 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:03<00:00,  1.91s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.93s/it]
+    epoch          : 15
+    loss           : 1.0
+    grad_norm      : 1.0380278234189966e-11
+    TRAIN_MeanDice : 4.00600490280123e-11
+    val_loss       : 0.7908112108707428
+    val_MeanDice   : 0.33606506884098053
+    val_Dice_TC    : 0.3104131259024143
+    val_Dice_WT    : 0.6460625231266022
+    val_Dice_ET    : 0.051719579845666885
+    test_loss      : 0.7945784330368042
+    test_MeanDice  : 0.34468021988868713
+    test_Dice_TC   : 0.34123990312218666
+    test_Dice_WT   : 0.6438168883323669
+    test_Dice_ET   : 0.04898386029526591
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:57<00:06,  6.36s/it]
+Train Epoch: 16 [0/10 (0%)] Loss: 0.800964
+val: 100%|██████████| 2/2 [00:03<00:00,  1.87s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.88s/it]
+    epoch          : 16
+    loss           : 0.8009642958641052
+    grad_norm      : 0.2325865775346756
+    TRAIN_MeanDice : 0.44215646386146545
+    val_loss       : 0.887474536895752
+    val_MeanDice   : 0.16936892515514046
+    val_Dice_TC    : 0.21270859243689133
+    val_Dice_WT    : 0.28973672538995743
+    val_Dice_ET    : 0.005661486217439466
+    test_loss      : 0.7940037250518799
+    test_MeanDice  : 0.32234130054712296
+    test_Dice_TC   : 0.31043198332190514
+    test_Dice_WT   : 0.6055779159069061
+    test_Dice_ET   : 0.05101406015455723
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.25s/it]
+Train Epoch: 17 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:03<00:00,  1.90s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.90s/it]
+    epoch          : 17
+    loss           : 1.0
+    grad_norm      : 1.1322192315643687e-11
+    TRAIN_MeanDice : 4.7020460441915546e-11
+    val_loss       : 0.8469725847244263
+    val_MeanDice   : 0.2464994117617607
+    val_Dice_TC    : 0.19438202492892742
+    val_Dice_WT    : 0.5199162364006042
+    val_Dice_ET    : 0.025199987459927797
+    test_loss      : 0.865619421005249
+    test_MeanDice  : 0.22299909219145775
+    test_Dice_TC   : 0.13432971388101578
+    test_Dice_WT   : 0.4761597812175751
+    test_Dice_ET   : 0.05850781057961285
+train:  90%|█████████ | 9/10 [00:55<00:06,  6.12s/it]
+Train Epoch: 18 [0/10 (0%)] Loss: 0.885248
+val: 100%|██████████| 2/2 [00:03<00:00,  1.93s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.92s/it]
+    epoch          : 18
+    loss           : 0.8852484822273254
+    grad_norm      : 0.11075851321220398
+    TRAIN_MeanDice : 0.19022978842258453
+    val_loss       : 0.8420849740505219
+    val_MeanDice   : 0.28710562735795975
+    val_Dice_TC    : 0.23502925038337708
+    val_Dice_WT    : 0.5614346265792847
+    val_Dice_ET    : 0.0648529794998467
+    test_loss      : 0.7965877950191498
+    test_MeanDice  : 0.31978216767311096
+    test_Dice_TC   : 0.25490980967879295
+    test_Dice_WT   : 0.6509045362472534
+    test_Dice_ET   : 0.05353215918876231
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.32s/it]
+Train Epoch: 19 [0/10 (0%)] Loss: 0.998756
+val: 100%|██████████| 2/2 [00:03<00:00,  1.96s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.99s/it]
+    epoch          : 19
+    loss           : 0.9987558722496033
+    grad_norm      : 0.0010527832200750709
+    TRAIN_MeanDice : 0.001769094611518085
+    val_loss       : 0.8922387063503265
+    val_MeanDice   : 0.1757476031780243
+    val_Dice_TC    : 0.17010038159787655
+    val_Dice_WT    : 0.3427661657333374
+    val_Dice_ET    : 0.014376263716258109
+    test_loss      : 0.8686726987361908
+    test_MeanDice  : 0.201021334156394
+    test_Dice_TC   : 0.2725336900912225
+    test_Dice_WT   : 0.3175823241472244
+    test_Dice_ET   : 0.012947960756719112
+train:  90%|█████████ | 9/10 [00:58<00:06,  6.53s/it]
+Train Epoch: 20 [0/10 (0%)] Loss: 0.901148
+val: 100%|██████████| 2/2 [00:03<00:00,  1.95s/it]
+test: 100%|██████████| 2/2 [00:04<00:00,  2.06s/it]
+    epoch          : 20
+    loss           : 0.9011476635932922
+    grad_norm      : 0.09604871273040771
+    TRAIN_MeanDice : 0.1882021427154541
+    val_loss       : 0.9230812788009644
+    val_MeanDice   : 0.12930527608841658
+    val_Dice_TC    : 0.04118757043033838
+    val_Dice_WT    : 0.30438769701868296
+    val_Dice_ET    : 0.04234054632252082
+    test_loss      : 0.7770920693874359
+    test_MeanDice  : 0.3546273559331894
+    test_Dice_TC   : 0.35969049111008644
+    test_Dice_WT   : 0.6461998820304871
+    test_Dice_ET   : 0.05799171328544617
+Saving checkpoint: /Users/shaw/aboutPaper/reExp/saved/lmambanet_ratio001_ep20/checkpoint-epoch20.pth ...

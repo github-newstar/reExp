@@ -1,0 +1,580 @@
+SwinUNETRSegModel(
+  (net): SwinUNETR(
+    (swinViT): SwinTransformer(
+      (patch_embed): PatchEmbed(
+        (proj): Conv3d(4, 24, kernel_size=(2, 2, 2), stride=(2, 2, 2))
+      )
+      (pos_drop): Dropout(p=0.0, inplace=False)
+      (layers1): ModuleList(
+        (0): BasicLayer(
+          (blocks): ModuleList(
+            (0-1): 2 x SwinTransformerBlock(
+              (norm1): LayerNorm((24,), eps=1e-05, elementwise_affine=True)
+              (attn): WindowAttention(
+                (qkv): Linear(in_features=24, out_features=72, bias=True)
+                (attn_drop): Dropout(p=0.0, inplace=False)
+                (proj): Linear(in_features=24, out_features=24, bias=True)
+                (proj_drop): Dropout(p=0.0, inplace=False)
+                (softmax): Softmax(dim=-1)
+              )
+              (drop_path): Identity()
+              (norm2): LayerNorm((24,), eps=1e-05, elementwise_affine=True)
+              (mlp): MLPBlock(
+                (linear1): Linear(in_features=24, out_features=96, bias=True)
+                (linear2): Linear(in_features=96, out_features=24, bias=True)
+                (fn): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+            )
+          )
+          (downsample): PatchMerging(
+            (reduction): Linear(in_features=192, out_features=48, bias=False)
+            (norm): LayerNorm((192,), eps=1e-05, elementwise_affine=True)
+          )
+        )
+      )
+      (layers2): ModuleList(
+        (0): BasicLayer(
+          (blocks): ModuleList(
+            (0-1): 2 x SwinTransformerBlock(
+              (norm1): LayerNorm((48,), eps=1e-05, elementwise_affine=True)
+              (attn): WindowAttention(
+                (qkv): Linear(in_features=48, out_features=144, bias=True)
+                (attn_drop): Dropout(p=0.0, inplace=False)
+                (proj): Linear(in_features=48, out_features=48, bias=True)
+                (proj_drop): Dropout(p=0.0, inplace=False)
+                (softmax): Softmax(dim=-1)
+              )
+              (drop_path): Identity()
+              (norm2): LayerNorm((48,), eps=1e-05, elementwise_affine=True)
+              (mlp): MLPBlock(
+                (linear1): Linear(in_features=48, out_features=192, bias=True)
+                (linear2): Linear(in_features=192, out_features=48, bias=True)
+                (fn): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+            )
+          )
+          (downsample): PatchMerging(
+            (reduction): Linear(in_features=384, out_features=96, bias=False)
+            (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
+          )
+        )
+      )
+      (layers3): ModuleList(
+        (0): BasicLayer(
+          (blocks): ModuleList(
+            (0-1): 2 x SwinTransformerBlock(
+              (norm1): LayerNorm((96,), eps=1e-05, elementwise_affine=True)
+              (attn): WindowAttention(
+                (qkv): Linear(in_features=96, out_features=288, bias=True)
+                (attn_drop): Dropout(p=0.0, inplace=False)
+                (proj): Linear(in_features=96, out_features=96, bias=True)
+                (proj_drop): Dropout(p=0.0, inplace=False)
+                (softmax): Softmax(dim=-1)
+              )
+              (drop_path): Identity()
+              (norm2): LayerNorm((96,), eps=1e-05, elementwise_affine=True)
+              (mlp): MLPBlock(
+                (linear1): Linear(in_features=96, out_features=384, bias=True)
+                (linear2): Linear(in_features=384, out_features=96, bias=True)
+                (fn): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+            )
+          )
+          (downsample): PatchMerging(
+            (reduction): Linear(in_features=768, out_features=192, bias=False)
+            (norm): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          )
+        )
+      )
+      (layers4): ModuleList(
+        (0): BasicLayer(
+          (blocks): ModuleList(
+            (0-1): 2 x SwinTransformerBlock(
+              (norm1): LayerNorm((192,), eps=1e-05, elementwise_affine=True)
+              (attn): WindowAttention(
+                (qkv): Linear(in_features=192, out_features=576, bias=True)
+                (attn_drop): Dropout(p=0.0, inplace=False)
+                (proj): Linear(in_features=192, out_features=192, bias=True)
+                (proj_drop): Dropout(p=0.0, inplace=False)
+                (softmax): Softmax(dim=-1)
+              )
+              (drop_path): Identity()
+              (norm2): LayerNorm((192,), eps=1e-05, elementwise_affine=True)
+              (mlp): MLPBlock(
+                (linear1): Linear(in_features=192, out_features=768, bias=True)
+                (linear2): Linear(in_features=768, out_features=192, bias=True)
+                (fn): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+            )
+          )
+          (downsample): PatchMerging(
+            (reduction): Linear(in_features=1536, out_features=384, bias=False)
+            (norm): LayerNorm((1536,), eps=1e-05, elementwise_affine=True)
+          )
+        )
+      )
+    )
+    (encoder1): UnetrBasicBlock(
+      (layer): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(4, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(24, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (conv3): Convolution(
+          (conv): Conv3d(4, 24, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+        )
+        (norm3): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (encoder2): UnetrBasicBlock(
+      (layer): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(24, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(24, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (encoder3): UnetrBasicBlock(
+      (layer): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(48, 48, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(48, 48, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(48, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(48, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (encoder4): UnetrBasicBlock(
+      (layer): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(96, 96, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(96, 96, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(96, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(96, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (encoder10): UnetrBasicBlock(
+      (layer): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(384, 384, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(384, 384, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(384, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(384, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (decoder5): UnetrUpBlock(
+      (transp_conv): Convolution(
+        (conv): ConvTranspose3d(384, 192, kernel_size=(2, 2, 2), stride=(2, 2, 2), bias=False)
+      )
+      (conv_block): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(384, 192, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(192, 192, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(192, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(192, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (conv3): Convolution(
+          (conv): Conv3d(384, 192, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+        )
+        (norm3): InstanceNorm3d(192, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (decoder4): UnetrUpBlock(
+      (transp_conv): Convolution(
+        (conv): ConvTranspose3d(192, 96, kernel_size=(2, 2, 2), stride=(2, 2, 2), bias=False)
+      )
+      (conv_block): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(192, 96, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(96, 96, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(96, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(96, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (conv3): Convolution(
+          (conv): Conv3d(192, 96, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+        )
+        (norm3): InstanceNorm3d(96, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (decoder3): UnetrUpBlock(
+      (transp_conv): Convolution(
+        (conv): ConvTranspose3d(96, 48, kernel_size=(2, 2, 2), stride=(2, 2, 2), bias=False)
+      )
+      (conv_block): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(96, 48, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(48, 48, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(48, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(48, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (conv3): Convolution(
+          (conv): Conv3d(96, 48, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+        )
+        (norm3): InstanceNorm3d(48, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (decoder2): UnetrUpBlock(
+      (transp_conv): Convolution(
+        (conv): ConvTranspose3d(48, 24, kernel_size=(2, 2, 2), stride=(2, 2, 2), bias=False)
+      )
+      (conv_block): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(48, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(24, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (conv3): Convolution(
+          (conv): Conv3d(48, 24, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+        )
+        (norm3): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (decoder1): UnetrUpBlock(
+      (transp_conv): Convolution(
+        (conv): ConvTranspose3d(24, 24, kernel_size=(2, 2, 2), stride=(2, 2, 2), bias=False)
+      )
+      (conv_block): UnetResBlock(
+        (conv1): Convolution(
+          (conv): Conv3d(48, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (conv2): Convolution(
+          (conv): Conv3d(24, 24, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False)
+        )
+        (lrelu): LeakyReLU(negative_slope=0.01, inplace=True)
+        (norm1): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (norm2): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+        (conv3): Convolution(
+          (conv): Conv3d(48, 24, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+        )
+        (norm3): InstanceNorm3d(24, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)
+      )
+    )
+    (out): UnetOutBlock(
+      (conv): Convolution(
+        (conv): Conv3d(24, 3, kernel_size=(1, 1, 1), stride=(1, 1, 1))
+      )
+    )
+  )
+)
+All parameters: 15705621
+Trainable parameters: 15705621
+train:  90%|█████████ | 9/10 [01:01<00:06,  6.86s/it]
+Train Epoch: 1 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:03<00:00,  1.62s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.60s/it]
+    epoch          : 1
+    loss           : 1.0
+    grad_norm      : 2.5890883187384972e-11
+    TRAIN_MeanDice : 5.7377574913530793e-11
+    val_loss       : 0.9194716811180115
+    val_MeanDice   : 0.10591747611761093
+    val_Dice_TC    : 0.08836730942130089
+    val_Dice_WT    : 0.22120662778615952
+    val_Dice_ET    : 0.00817848151200451
+    test_loss      : 0.8766319751739502
+    test_MeanDice  : 0.17851150780916214
+    test_Dice_TC   : 0.11708764731884003
+    test_Dice_WT   : 0.40867243707180023
+    test_Dice_ET   : 0.009774446953088045
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [01:10<00:07,  7.88s/it]
+Train Epoch: 2 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:03<00:00,  1.77s/it]
+test: 100%|██████████| 2/2 [00:04<00:00,  2.13s/it]
+    epoch          : 2
+    loss           : 1.0
+    grad_norm      : 2.5466628805759228e-11
+    TRAIN_MeanDice : 7.00931118702286e-11
+    val_loss       : 0.8777144551277161
+    val_MeanDice   : 0.1654137820005417
+    val_Dice_TC    : 0.12842823192477226
+    val_Dice_WT    : 0.3589409962296486
+    val_Dice_ET    : 0.008872136240825057
+    test_loss      : 0.9323703050613403
+    test_MeanDice  : 0.11355641484260559
+    test_Dice_TC   : 0.08978551253676414
+    test_Dice_WT   : 0.24489574134349823
+    test_Dice_ET   : 0.005987984681269154
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [01:15<00:08,  8.34s/it]
+Train Epoch: 3 [0/10 (0%)] Loss: 0.976370
+val: 100%|██████████| 2/2 [00:03<00:00,  1.68s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.63s/it]
+    epoch          : 3
+    loss           : 0.9763703346252441
+    grad_norm      : 0.18731258809566498
+    TRAIN_MeanDice : 0.042369622737169266
+    val_loss       : 0.8843254148960114
+    val_MeanDice   : 0.14937563240528107
+    val_Dice_TC    : 0.12341497093439102
+    val_Dice_WT    : 0.31900668144226074
+    val_Dice_ET    : 0.005705235991626978
+    test_loss      : 0.8722449839115143
+    test_MeanDice  : 0.16844414174556732
+    test_Dice_TC   : 0.15602540969848633
+    test_Dice_WT   : 0.3406394124031067
+    test_Dice_ET   : 0.008667605696246028
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.31s/it]
+Train Epoch: 4 [0/10 (0%)] Loss: 0.992828
+val: 100%|██████████| 2/2 [00:03<00:00,  1.66s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.61s/it]
+    epoch          : 4
+    loss           : 0.992828369140625
+    grad_norm      : 0.041187893599271774
+    TRAIN_MeanDice : 0.012015274725854397
+    val_loss       : 0.9169337451457977
+    val_MeanDice   : 0.14339515566825867
+    val_Dice_TC    : 0.16247310489416122
+    val_Dice_WT    : 0.26315888017416
+    val_Dice_ET    : 0.004553486200165935
+    test_loss      : 0.9399217665195465
+    test_MeanDice  : 0.08905421220697463
+    test_Dice_TC   : 0.06333176349289715
+    test_Dice_WT   : 0.19613064778968692
+    test_Dice_ET   : 0.007700242812234137
+train:  90%|█████████ | 9/10 [00:57<00:06,  6.43s/it]
+Train Epoch: 5 [0/10 (0%)] Loss: 0.999992
+val: 100%|██████████| 2/2 [00:03<00:00,  1.59s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.55s/it]
+    epoch          : 5
+    loss           : 0.9999918341636658
+    grad_norm      : 0.0001356757857138291
+    TRAIN_MeanDice : 9.990368198486976e-06
+    val_loss       : 0.9006532430648804
+    val_MeanDice   : 0.16202103905379772
+    val_Dice_TC    : 0.2359220962971449
+    val_Dice_WT    : 0.2463373765349388
+    val_Dice_ET    : 0.0038036220939829946
+    test_loss      : 0.8342508673667908
+    test_MeanDice  : 0.2531872019171715
+    test_Dice_TC   : 0.33536767214536667
+    test_Dice_WT   : 0.41132406890392303
+    test_Dice_ET   : 0.012869835365563631
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.32s/it]
+Train Epoch: 6 [0/10 (0%)] Loss: 0.829241
+val: 100%|██████████| 2/2 [00:03<00:00,  1.78s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.64s/it]
+    epoch          : 6
+    loss           : 0.8292407989501953
+    grad_norm      : 0.3805851936340332
+    TRAIN_MeanDice : 0.2349228858947754
+    val_loss       : 0.9353481531143188
+    val_MeanDice   : 0.09516181668732315
+    val_Dice_TC    : 0.07072275880719776
+    val_Dice_WT    : 0.20554471388459206
+    val_Dice_ET    : 0.009217962628924823
+    test_loss      : 0.8968228995800018
+    test_MeanDice  : 0.1579078771173954
+    test_Dice_TC   : 0.21871967241168022
+    test_Dice_WT   : 0.24844016879796982
+    test_Dice_ET   : 0.006563802366144955
+train:  90%|█████████ | 9/10 [01:08<00:07,  7.63s/it]
+Train Epoch: 7 [0/10 (0%)] Loss: 0.998945
+val: 100%|██████████| 2/2 [00:03<00:00,  1.69s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.58s/it]
+    epoch          : 7
+    loss           : 0.9989454746246338
+    grad_norm      : 0.004473598208278418
+    TRAIN_MeanDice : 0.0011944331927224994
+    val_loss       : 0.8505315482616425
+    val_MeanDice   : 0.22272899001836777
+    val_Dice_TC    : 0.2914538234472275
+    val_Dice_WT    : 0.3653022348880768
+    val_Dice_ET    : 0.011430880287662148
+    test_loss      : 0.8944759964942932
+    test_MeanDice  : 0.1645362377166748
+    test_Dice_TC   : 0.2189696542918682
+    test_Dice_WT   : 0.2661854326725006
+    test_Dice_ET   : 0.008453629387076944
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [01:14<00:08,  8.23s/it]
+Train Epoch: 8 [0/10 (0%)] Loss: 0.936932
+val: 100%|██████████| 2/2 [00:04<00:00,  2.00s/it]
+test: 100%|██████████| 2/2 [00:04<00:00,  2.14s/it]
+    epoch          : 8
+    loss           : 0.9369322657585144
+    grad_norm      : 0.11643707007169724
+    TRAIN_MeanDice : 0.084682397544384
+    val_loss       : 0.8879654705524445
+    val_MeanDice   : 0.1800018846988678
+    val_Dice_TC    : 0.26376064121723175
+    val_Dice_WT    : 0.2681710049510002
+    val_Dice_ET    : 0.008073976903688163
+    test_loss      : 0.9389075636863708
+    test_MeanDice  : 0.10377652430906892
+    test_Dice_TC   : 0.1720202714495204
+    test_Dice_WT   : 0.13908317591995
+    test_Dice_ET   : 0.0002261252585526491
+train:  90%|█████████ | 9/10 [01:12<00:08,  8.06s/it]
+Train Epoch: 9 [0/10 (0%)] Loss: 1.000000
+val: 100%|██████████| 2/2 [00:06<00:00,  3.05s/it]
+test: 100%|██████████| 2/2 [00:04<00:00,  2.25s/it]
+    epoch          : 9
+    loss           : 1.0
+    grad_norm      : 2.2882959416214987e-11
+    TRAIN_MeanDice : 3.004472365342181e-11
+    val_loss       : 0.8860543966293335
+    val_MeanDice   : 0.17342084273695946
+    val_Dice_TC    : 0.14838648587465286
+    val_Dice_WT    : 0.3592426963150501
+    val_Dice_ET    : 0.01263333042152226
+    test_loss      : 0.8946616947650909
+    test_MeanDice  : 0.16117055714130402
+    test_Dice_TC   : 0.11334501206874847
+    test_Dice_WT   : 0.35696881636977196
+    test_Dice_ET   : 0.013197820633649826
+train:  90%|█████████ | 9/10 [01:05<00:07,  7.33s/it]
+Train Epoch: 10 [0/10 (0%)] Loss: 0.807692
+val: 100%|██████████| 2/2 [00:03<00:00,  1.74s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.93s/it]
+    epoch          : 10
+    loss           : 0.8076916337013245
+    grad_norm      : 0.29357826709747314
+    TRAIN_MeanDice : 0.2655538022518158
+    val_loss       : 0.9104692041873932
+    val_MeanDice   : 0.1675938330590725
+    val_Dice_TC    : 0.18038301914930344
+    val_Dice_WT    : 0.3105742037296295
+    val_Dice_ET    : 0.011824273242382333
+    test_loss      : 0.9162908494472504
+    test_MeanDice  : 0.1343580037355423
+    test_Dice_TC   : 0.16567086055874825
+    test_Dice_WT   : 0.23100709915161133
+    test_Dice_ET   : 0.006396040786057711
+Saving checkpoint: /Users/shaw/aboutPaper/reExp/saved/brats23_ratio001_ep20/checkpoint-epoch10.pth ...
+train:  90%|█████████ | 9/10 [01:09<00:07,  7.73s/it]
+Train Epoch: 11 [0/10 (0%)] Loss: 0.843736
+val: 100%|██████████| 2/2 [00:03<00:00,  1.76s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.60s/it]
+    epoch          : 11
+    loss           : 0.843736469745636
+    grad_norm      : 0.35659000277519226
+    TRAIN_MeanDice : 0.35456550121307373
+    val_loss       : 0.9191702604293823
+    val_MeanDice   : 0.1507188342511654
+    val_Dice_TC    : 0.2002703733742237
+    val_Dice_WT    : 0.24927788972854614
+    val_Dice_ET    : 0.0026082097610924393
+    test_loss      : 0.8065497279167175
+    test_MeanDice  : 0.3385147452354431
+    test_Dice_TC   : 0.4306397959589958
+    test_Dice_WT   : 0.5718716681003571
+    test_Dice_ET   : 0.013032825663685799
+train:  90%|█████████ | 9/10 [01:05<00:07,  7.32s/it]
+Train Epoch: 12 [0/10 (0%)] Loss: 0.965922
+val: 100%|██████████| 2/2 [00:03<00:00,  1.66s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.57s/it]
+    epoch          : 12
+    loss           : 0.9659221768379211
+    grad_norm      : 0.059304505586624146
+    TRAIN_MeanDice : 0.052083734422922134
+    val_loss       : 0.8164747357368469
+    val_MeanDice   : 0.28865697979927063
+    val_Dice_TC    : 0.3915395066142082
+    val_Dice_WT    : 0.4609634280204773
+    val_Dice_ET    : 0.01346803200431168
+    test_loss      : 0.8934926390647888
+    test_MeanDice  : 0.1712479954585433
+    test_Dice_TC   : 0.2766016040695831
+    test_Dice_WT   : 0.23500111140310764
+    test_Dice_ET   : 0.002141264660167508
+Saving current best: model_best.pth ...
+train:  90%|█████████ | 9/10 [00:53<00:05,  5.97s/it]
+Train Epoch: 13 [0/10 (0%)] Loss: 0.838764
+val: 100%|██████████| 2/2 [00:03<00:00,  1.64s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.94s/it]
+    epoch          : 13
+    loss           : 0.8387637138366699
+    grad_norm      : 0.41033875942230225
+    TRAIN_MeanDice : 0.29699280858039856
+    val_loss       : 0.887621283531189
+    val_MeanDice   : 0.2078498943010345
+    val_Dice_TC    : 0.35759952668041156
+    val_Dice_WT    : 0.2637451570481062
+    val_Dice_ET    : 0.002205022152046676
+    test_loss      : 0.8685473203659058
+    test_MeanDice  : 0.2240876096766442
+    test_Dice_TC   : 0.34449654822556797
+    test_Dice_WT   : 0.32534017809666693
+    test_Dice_ET   : 0.0024260687706880142
+train:  90%|█████████ | 9/10 [01:02<00:06,  6.99s/it]
+Train Epoch: 14 [0/10 (0%)] Loss: 0.970089
+val: 100%|██████████| 2/2 [00:03<00:00,  1.60s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.60s/it]
+    epoch          : 14
+    loss           : 0.9700892567634583
+    grad_norm      : 0.08740005642175674
+    TRAIN_MeanDice : 0.04410047456622124
+    val_loss       : 0.9392695724964142
+    val_MeanDice   : 0.0980999069288373
+    val_Dice_TC    : 0.15544502440928773
+    val_Dice_WT    : 0.13803707715123892
+    val_Dice_ET    : 0.0008176321930951501
+    test_loss      : 0.7931096255779266
+    test_MeanDice  : 0.350117951631546
+    test_Dice_TC   : 0.44239042699337006
+    test_Dice_WT   : 0.595156729221344
+    test_Dice_ET   : 0.012806692160665989
+train:  90%|█████████ | 9/10 [00:52<00:05,  5.84s/it]
+Train Epoch: 15 [0/10 (0%)] Loss: 0.817132
+val: 100%|██████████| 2/2 [00:03<00:00,  1.68s/it]
+test: 100%|██████████| 2/2 [00:03<00:00,  1.55s/it]
+    epoch          : 15
+    loss           : 0.8171319961547852
+    grad_norm      : 0.2823573350906372
+    TRAIN_MeanDice : 0.37892818450927734
+    val_loss       : 0.8510543704032898
+    val_MeanDice   : 0.2696797028183937
+    val_Dice_TC    : 0.3207310140132904
+    val_Dice_WT    : 0.48014165461063385
+    val_Dice_ET    : 0.00816643302096054
+    test_loss      : 0.9421828985214233
+    test_MeanDice  : 0.0885102404281497
+    test_Dice_TC   : 0.04483240388799459
+    test_Dice_WT   : 0.21574734151363373
+    test_Dice_ET   : 0.004950981051479175
+train:  90%|█████████ | 9/10 [00:56<00:06,  6.26s/it]
+Train Epoch: 16 [0/10 (0%)] Loss: 0.947511
+val:   0%|          | 0/2 [00:00<?, ?it/s]

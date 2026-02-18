@@ -1,0 +1,28 @@
+[project]
+name = "reexp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.4.1",
+    "torchvision>=0.19.1",
+    "torchmetrics",
+    "numpy==1.26.4",
+    "tqdm",
+    "matplotlib",
+    "pandas",
+    "wandb",
+    "comet_ml",
+    "hydra-core",
+    "monai>=1.5.2",
+    "nibabel",
+    "einops",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "isort",
+    "pre-commit",
+]

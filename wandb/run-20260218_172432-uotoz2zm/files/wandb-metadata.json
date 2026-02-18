@@ -1,0 +1,50 @@
+{
+  "os": "macOS-26.2-arm64-arm-64bit",
+  "python": "CPython 3.12.12",
+  "startedAt": "2026-02-18T09:24:32.553073Z",
+  "args": [
+    "-cn=brats23_swin_unetr",
+    "datasets.train.data_dir=/Users/shaw/aboutPaper/cbexp/data/BraTS2023",
+    "datasets.val.data_dir=/Users/shaw/aboutPaper/cbexp/data/BraTS2023",
+    "datasets.test.data_dir=/Users/shaw/aboutPaper/cbexp/data/BraTS2023",
+    "datasets.train.usage_ratio=0.01",
+    "datasets.val.usage_ratio=0.01",
+    "datasets.test.usage_ratio=0.01",
+    "datasets.val.instance_transforms=${transforms.instance_transforms.train}",
+    "datasets.test.instance_transforms=${transforms.instance_transforms.train}",
+    "dataloader.num_workers=0",
+    "trainer.n_epochs=1",
+    "trainer.epoch_len=1",
+    "trainer.override=True",
+    "writer.mode=online",
+    "writer.run_name=smoke_brats23_001_wandb"
+  ],
+  "program": "/Users/shaw/aboutPaper/reExp/train.py",
+  "codePath": "train.py",
+  "codePathLocal": "train.py",
+  "email": "rss467301127@gmail.com",
+  "root": "/Users/shaw/aboutPaper/reExp",
+  "host": "SHAWREN-MC2",
+  "executable": "/Users/shaw/aboutPaper/reExp/.venv/bin/python3",
+  "cpu_count": 12,
+  "cpu_count_logical": 12,
+  "disk": {
+    "/": {
+      "total": "994662584320",
+      "used": "351879970816"
+    }
+  },
+  "memory": {
+    "total": "38654705664"
+  },
+  "apple": {
+    "name": "Apple M3 Pro",
+    "ecpuCores": 6,
+    "pcpuCores": 6,
+    "gpuCores": 18,
+    "memoryGb": 36,
+    "swapTotalBytes": "5368709120",
+    "ramTotalBytes": "38654705664"
+  },
+  "writerId": "2f5blo2dvmujhbqhk2atyv30bh5l746e"
+}

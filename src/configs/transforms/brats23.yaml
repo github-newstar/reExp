@@ -1,0 +1,4 @@
+defaults:
+  - batch_transforms: brats23
+  - instance_transforms: brats23
+  - _self_
