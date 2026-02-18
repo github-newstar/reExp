@@ -99,25 +99,6 @@ class DIDCBlock(nn.Module):
         return x + residual
 
 
-class _GRUFallback(nn.Module):
-    """
-    Fallback sequence model used when mamba_ssm is unavailable.
-    """
-
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.gru = nn.GRU(
-            input_size=d_model,
-            hidden_size=d_model,
-            num_layers=1,
-            batch_first=True,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x, _ = self.gru(x)
-        return x
-
-
 class VSSBottleneck(nn.Module):
     """
     3D Vision State Space bottleneck at the lowest resolution.
@@ -134,18 +115,14 @@ class VSSBottleneck(nn.Module):
     ):
         super().__init__()
         self.norm = nn.LayerNorm(channels)
+        from mamba_ssm import Mamba
 
-        try:
-            from mamba_ssm import Mamba
-
-            self.sequence_model = Mamba(
-                d_model=channels,
-                d_state=mamba_state,
-                d_conv=mamba_conv,
-                expand=mamba_expand,
-            )
-        except Exception:
-            self.sequence_model = _GRUFallback(d_model=channels)
+        self.sequence_model = Mamba(
+            d_model=channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, c, d, h, w = x.shape
