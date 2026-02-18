@@ -1,3 +1,5 @@
+from monai.inferers import sliding_window_inference
+
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 
@@ -6,6 +8,33 @@ class Trainer(BaseTrainer):
     """
     Trainer class. Defines the logic of batch logging and processing.
     """
+
+    def _predict_logits(self, batch):
+        """
+        Predict logits for a batch.
+
+        Training uses direct full-volume forward.
+        Validation/testing can optionally use MONAI sliding-window inference.
+        """
+        image = batch["image"]
+        use_sw = (not self.is_train) and self.cfg_trainer.get(
+            "use_sliding_window_inference", False
+        )
+        if not use_sw:
+            return self.model(**batch)["logits"]
+
+        roi_size = tuple(self.cfg_trainer.get("sw_roi_size", [96, 96, 96]))
+        sw_batch_size = int(self.cfg_trainer.get("sw_batch_size", 1))
+        overlap = float(self.cfg_trainer.get("sw_overlap", 0.5))
+
+        logits = sliding_window_inference(
+            inputs=image,
+            roi_size=roi_size,
+            sw_batch_size=sw_batch_size,
+            predictor=lambda x: self.model(image=x)["logits"],
+            overlap=overlap,
+        )
+        return logits
 
     def process_batch(self, batch, metrics: MetricTracker):
         """
@@ -34,8 +63,7 @@ class Trainer(BaseTrainer):
             metric_funcs = self.metrics["train"]
             self.optimizer.zero_grad()
 
-        outputs = self.model(**batch)
-        batch.update(outputs)
+        batch["logits"] = self._predict_logits(batch)
 
         all_losses = self.criterion(**batch)
         batch.update(all_losses)

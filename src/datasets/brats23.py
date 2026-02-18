@@ -223,10 +223,60 @@ class BraTS23CachedVectorDataset(Dataset):
     def __len__(self):
         return len(self._index)
 
+    @staticmethod
+    def _load_payload(vector_path):
+        """
+        Load cached payload with backward compatibility for torch versions.
+        """
+        try:
+            return torch.load(
+                vector_path,
+                map_location="cpu",
+                mmap=True,
+                weights_only=False,
+            )
+        except TypeError:
+            try:
+                return torch.load(vector_path, map_location="cpu", weights_only=False)
+            except TypeError:
+                return torch.load(vector_path, map_location="cpu")
+
+    @staticmethod
+    def _to_three_channel_label(label):
+        """
+        Convert scalar BraTS label map to [TC, WT, ET] channels.
+        Accepts [D,H,W] or [1,D,H,W].
+        """
+        if label.ndim == 4 and label.shape[0] == 1:
+            label = label.squeeze(0)
+        if label.ndim != 3:
+            raise ValueError(f"Unsupported scalar label shape: {tuple(label.shape)}")
+
+        label = label.long()
+        tc = (label == 1) | (label == 3)
+        wt = (label == 1) | (label == 2) | (label == 3)
+        et = label == 3
+        return torch.stack([tc, wt, et], dim=0).float()
+
     def __getitem__(self, ind):
         record = self._index[ind]
         vector_path = Path(record["vector_path"]).expanduser().resolve()
-        sample = torch.load(vector_path, map_location="cpu")
+        sample = self._load_payload(vector_path)
+
+        image = torch.as_tensor(sample["image"]).float()
+        label = torch.as_tensor(sample["label"])
+        if label.ndim == 3 or (label.ndim == 4 and label.shape[0] == 1):
+            label = self._to_three_channel_label(label)
+        elif label.ndim == 4 and label.shape[0] == 3:
+            label = label.float()
+        else:
+            raise ValueError(
+                f"Unsupported cached label shape {tuple(label.shape)} in {vector_path}"
+            )
+
+        sample["image"] = image
+        sample["label"] = label
+        sample.setdefault("case_id", record.get("case_id", vector_path.stem))
         if self.instance_transforms is not None:
             sample = self.instance_transforms(sample)
         return sample

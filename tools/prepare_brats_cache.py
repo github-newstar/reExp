@@ -4,11 +4,17 @@ Prepare BraTS23 cache under data/cached with two artifacts:
 1) Optional uncompressed NIfTI files (.nii) for faster repeated reads.
 2) Vector cache files (.pt) used directly by training dataloaders.
 
-Vector file schema:
+Optimized vector schema (smaller disk footprint for HDD):
 {
-    "image": FloatTensor [4, D, H, W], normalized channel-wise on nonzero voxels,
-    "label": FloatTensor [3, D, H, W], channels = [TC, WT, ET],
+    "image": FloatTensor [4, D, H, W], usually float16 after normalization,
+    "label": UInt8Tensor [1, D, H, W], scalar class map in {0,1,2,3},
     "case_id": str,
+    "meta": {
+        "orig_shape": [D, H, W],
+        "cropped_shape": [D, H, W],
+        "bbox_start": [d0, h0, w0],
+        "bbox_end": [d1, h1, w1],
+    },
 }
 """
 
@@ -44,17 +50,80 @@ def normalize_nonzero_channelwise(image: np.ndarray) -> np.ndarray:
     return output
 
 
-def label_to_brats3_channels(label: np.ndarray) -> np.ndarray:
+def _foreground_bbox(image: np.ndarray):
     """
-    Convert label map to 3 channels [TC, WT, ET] for BraTS23 convention.
-    - TC: label 1 or 3
-    - WT: label 1 or 2 or 3
-    - ET: label 3
+    Compute foreground bbox from multi-modal image.
+    Input shape: [C, D, H, W]
+    Returns:
+        ((d0, d1), (h0, h1), (w0, w1)) with end-exclusive indices.
     """
-    tc = (label == 1) | (label == 3)
-    wt = (label == 1) | (label == 2) | (label == 3)
-    et = label == 3
-    return np.stack([tc, wt, et], axis=0).astype(np.float32)
+    fg = np.any(image != 0, axis=0)
+    coords = np.where(fg)
+    if coords[0].size == 0:
+        _, d, h, w = image.shape
+        return (0, d), (0, h), (0, w)
+
+    d0, d1 = int(coords[0].min()), int(coords[0].max()) + 1
+    h0, h1 = int(coords[1].min()), int(coords[1].max()) + 1
+    w0, w1 = int(coords[2].min()), int(coords[2].max()) + 1
+    return (d0, d1), (h0, h1), (w0, w1)
+
+
+def _align_interval(start, end, limit, margin, min_size, k_divisible):
+    start = max(0, int(start) - margin)
+    end = min(limit, int(end) + margin)
+    if end <= start:
+        return 0, limit
+
+    target = max(end - start, int(min_size))
+    if k_divisible > 1:
+        target = ((target + k_divisible - 1) // k_divisible) * k_divisible
+    if target >= limit:
+        return 0, limit
+
+    center = (start + end) // 2
+    new_start = center - target // 2
+    new_end = new_start + target
+
+    if new_start < 0:
+        new_end -= new_start
+        new_start = 0
+    if new_end > limit:
+        shift = new_end - limit
+        new_start -= shift
+        new_end = limit
+        if new_start < 0:
+            new_start = 0
+
+    return int(new_start), int(new_end)
+
+
+def crop_to_foreground(
+    image: np.ndarray,
+    label: np.ndarray,
+    margin: int,
+    min_size: tuple[int, int, int],
+    k_divisible: int,
+):
+    """
+    Crop image/label to foreground bbox, then align shape by constraints.
+    """
+    (d0, d1), (h0, h1), (w0, w1) = _foreground_bbox(image)
+    _, d_lim, h_lim, w_lim = image.shape
+
+    d0, d1 = _align_interval(
+        d0, d1, d_lim, margin=margin, min_size=min_size[0], k_divisible=k_divisible
+    )
+    h0, h1 = _align_interval(
+        h0, h1, h_lim, margin=margin, min_size=min_size[1], k_divisible=k_divisible
+    )
+    w0, w1 = _align_interval(
+        w0, w1, w_lim, margin=margin, min_size=min_size[2], k_divisible=k_divisible
+    )
+
+    image_cropped = image[:, d0:d1, h0:h1, w0:w1]
+    label_cropped = label[d0:d1, h0:h1, w0:w1]
+    return image_cropped, label_cropped, (d0, h0, w0), (d1, h1, w1)
 
 
 def maybe_write_uncompressed_nifti(src_nii_gz: Path, dst_nii: Path) -> None:
@@ -79,6 +148,11 @@ def prepare_cache(
     cache_dir: Path,
     write_uncompressed_nii: bool,
     overwrite_vectors: bool,
+    crop_foreground: bool,
+    crop_margin: int,
+    min_size: tuple[int, int, int],
+    k_divisible: int,
+    image_dtype: str,
 ) -> None:
     data_dir = data_dir.expanduser().resolve()
     cache_dir = cache_dir.expanduser().resolve()
@@ -124,13 +198,37 @@ def prepare_cache(
         image = np.stack(image_arrays, axis=0)  # [4, D, H, W]
         image = normalize_nonzero_channelwise(image=image)
 
-        label = nib.load(str(label_path)).get_fdata(dtype=np.float32)
-        label = label_to_brats3_channels(label=label)
+        label = nib.load(str(label_path)).get_fdata(dtype=np.float32).astype(np.uint8)
+        label[label == 4] = 3  # BraTS2021 compatibility
+
+        orig_shape = tuple(int(x) for x in image.shape[1:])
+        bbox_start = (0, 0, 0)
+        bbox_end = orig_shape
+        if crop_foreground:
+            image, label, bbox_start, bbox_end = crop_to_foreground(
+                image=image,
+                label=label,
+                margin=crop_margin,
+                min_size=min_size,
+                k_divisible=k_divisible,
+            )
+
+        if image_dtype == "float16":
+            image = image.astype(np.float16, copy=False)
+        else:
+            image = image.astype(np.float32, copy=False)
+        label = label[np.newaxis, ...].astype(np.uint8, copy=False)  # [1, D, H, W]
 
         payload = {
             "image": torch.from_numpy(image),
             "label": torch.from_numpy(label),
             "case_id": case_id,
+            "meta": {
+                "orig_shape": list(orig_shape),
+                "cropped_shape": [int(x) for x in image.shape[1:]],
+                "bbox_start": [int(x) for x in bbox_start],
+                "bbox_end": [int(x) for x in bbox_end],
+            },
         }
         torch.save(payload, vector_path)
 
@@ -171,6 +269,37 @@ def parse_args():
         action="store_true",
         help="Recreate existing .pt vectors if they already exist.",
     )
+    parser.add_argument(
+        "--no-crop-foreground",
+        action="store_true",
+        help="Disable foreground crop for cached vectors.",
+    )
+    parser.add_argument(
+        "--crop-margin",
+        type=int,
+        default=4,
+        help="Foreground bbox expansion margin in voxels.",
+    )
+    parser.add_argument(
+        "--min-size",
+        type=int,
+        nargs=3,
+        default=[96, 96, 96],
+        metavar=("D", "H", "W"),
+        help="Minimum cropped spatial size before saving vectors.",
+    )
+    parser.add_argument(
+        "--k-divisible",
+        type=int,
+        default=32,
+        help="Align cropped shape to be divisible by this value.",
+    )
+    parser.add_argument(
+        "--image-dtype",
+        choices=["float16", "float32"],
+        default="float16",
+        help="Image tensor dtype stored in vectors.",
+    )
     return parser.parse_args()
 
 
@@ -181,6 +310,11 @@ def main():
         cache_dir=args.cache_dir,
         write_uncompressed_nii=not args.no_uncompressed_nii,
         overwrite_vectors=args.overwrite_vectors,
+        crop_foreground=not args.no_crop_foreground,
+        crop_margin=args.crop_margin,
+        min_size=tuple(args.min_size),
+        k_divisible=args.k_divisible,
+        image_dtype=args.image_dtype,
     )
 
 
