@@ -1,0 +1,26 @@
+train:
+  - _target_: src.metrics.MeanDiceMetric
+    name: "TRAIN_MeanDice"
+    threshold: 0.5
+    apply_sigmoid: True
+
+inference:
+  - _target_: src.metrics.MeanDiceMetric
+    name: "MeanDice"
+    threshold: 0.5
+    apply_sigmoid: True
+  - _target_: src.metrics.ChannelDiceMetric
+    name: "Dice_TC"
+    channel_index: 0
+    threshold: 0.5
+    apply_sigmoid: True
+  - _target_: src.metrics.ChannelDiceMetric
+    name: "Dice_WT"
+    channel_index: 1
+    threshold: 0.5
+    apply_sigmoid: True
+  - _target_: src.metrics.ChannelDiceMetric
+    name: "Dice_ET"
+    channel_index: 2
+    threshold: 0.5
+    apply_sigmoid: True

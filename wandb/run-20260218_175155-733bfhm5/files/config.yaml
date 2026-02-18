@@ -1,0 +1,281 @@
+_wandb:
+    value:
+        cli_version: 0.25.0
+        e:
+            rfkeb1oj5vgjf5fgr81fvrmobilotzkp:
+                apple:
+                    ecpuCores: 6
+                    gpuCores: 18
+                    memoryGb: 36
+                    name: Apple M3 Pro
+                    pcpuCores: 6
+                    ramTotalBytes: "38654705664"
+                    swapTotalBytes: "10737418240"
+                args:
+                    - -cn=brats23_swin_unetr
+                    - model=lmambanet
+                    - datasets.train.data_dir=/Users/shaw/aboutPaper/cbexp/data/BraTS2023
+                    - datasets.val.data_dir=/Users/shaw/aboutPaper/cbexp/data/BraTS2023
+                    - datasets.test.data_dir=/Users/shaw/aboutPaper/cbexp/data/BraTS2023
+                    - datasets.train.usage_ratio=0.01
+                    - datasets.val.usage_ratio=0.01
+                    - datasets.test.usage_ratio=0.01
+                    - datasets.val.instance_transforms=${transforms.instance_transforms.train}
+                    - datasets.test.instance_transforms=${transforms.instance_transforms.train}
+                    - dataloader.num_workers=0
+                    - trainer.n_epochs=20
+                    - trainer.override=True
+                    - writer.mode=online
+                    - writer.run_name=lmambanet_ratio001_ep20
+                codePath: train.py
+                codePathLocal: train.py
+                cpu_count: 12
+                cpu_count_logical: 12
+                disk:
+                    /:
+                        total: "994662584320"
+                        used: "357881769984"
+                email: rss467301127@gmail.com
+                executable: /Users/shaw/aboutPaper/reExp/.venv/bin/python3
+                host: SHAWREN-MC2
+                memory:
+                    total: "38654705664"
+                os: macOS-26.2-arm64-arm-64bit
+                program: /Users/shaw/aboutPaper/reExp/train.py
+                python: CPython 3.12.12
+                root: /Users/shaw/aboutPaper/reExp
+                startedAt: "2026-02-18T09:51:55.150484Z"
+                writerId: rfkeb1oj5vgjf5fgr81fvrmobilotzkp
+        m: []
+        python_version: 3.12.12
+        t:
+            "1":
+                - 1
+                - 50
+            "2":
+                - 1
+                - 41
+                - 48
+                - 50
+            "3":
+                - 13
+                - 14
+                - 16
+                - 61
+            "4": 3.12.12
+            "5": 0.25.0
+            "12": 0.25.0
+            "13": darwin-arm64
+dataloader:
+    value:
+        _target_: torch.utils.data.DataLoader
+        batch_size: 1
+        num_workers: 0
+        pin_memory: true
+datasets:
+    value:
+        test:
+            _target_: src.datasets.BraTS23Dataset
+            data_dir: /Users/shaw/aboutPaper/cbexp/data/BraTS2023
+            fold: 0
+            instance_transforms: ${transforms.instance_transforms.train}
+            n_folds: 5
+            partition: test
+            require_label: true
+            seed: 42
+            usage_ratio: 0.01
+        train:
+            _target_: src.datasets.BraTS23Dataset
+            data_dir: /Users/shaw/aboutPaper/cbexp/data/BraTS2023
+            fold: 0
+            instance_transforms: ${transforms.instance_transforms.train}
+            n_folds: 5
+            partition: train
+            require_label: true
+            seed: 42
+            usage_ratio: 0.01
+        val:
+            _target_: src.datasets.BraTS23Dataset
+            data_dir: /Users/shaw/aboutPaper/cbexp/data/BraTS2023
+            fold: 0
+            instance_transforms: ${transforms.instance_transforms.train}
+            n_folds: 5
+            partition: val
+            require_label: true
+            seed: 42
+            usage_ratio: 0.01
+loss_function:
+    value:
+        _target_: src.loss.DiceSegLoss
+        sigmoid: true
+        to_onehot_y: false
+lr_scheduler:
+    value:
+        _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+        T_max: ${trainer.n_epochs}
+metrics:
+    value:
+        inference:
+            - _target_: src.metrics.MeanDiceMetric
+              apply_sigmoid: true
+              name: MeanDice
+              threshold: 0.5
+            - _target_: src.metrics.ChannelDiceMetric
+              apply_sigmoid: true
+              channel_index: 0
+              name: Dice_TC
+              threshold: 0.5
+            - _target_: src.metrics.ChannelDiceMetric
+              apply_sigmoid: true
+              channel_index: 1
+              name: Dice_WT
+              threshold: 0.5
+            - _target_: src.metrics.ChannelDiceMetric
+              apply_sigmoid: true
+              channel_index: 2
+              name: Dice_ET
+              threshold: 0.5
+        train:
+            - _target_: src.metrics.MeanDiceMetric
+              apply_sigmoid: true
+              name: TRAIN_MeanDice
+              threshold: 0.5
+model:
+    value:
+        _target_: src.model.LMambaNet
+        feature_channels:
+            - 32
+            - 64
+            - 128
+            - 256
+        in_channels: 4
+        out_channels: 3
+optimizer:
+    value:
+        _target_: torch.optim.AdamW
+        lr: 0.0001
+        weight_decay: 1e-05
+trainer:
+    value:
+        device: auto
+        device_tensors:
+            - image
+            - label
+        early_stop: ${trainer.n_epochs}
+        epoch_len: null
+        log_step: 10
+        monitor: max val_MeanDice
+        n_epochs: 20
+        override: true
+        resume_from: null
+        save_dir: saved
+        save_period: 10
+        seed: 42
+transforms:
+    value:
+        batch_transforms:
+            inference: null
+            train: null
+        instance_transforms:
+            inference:
+                _target_: monai.transforms.Compose
+                transforms:
+                    - _target_: monai.transforms.LoadImaged
+                      keys:
+                        - image
+                        - label
+                    - _target_: monai.transforms.EnsureChannelFirstd
+                      keys:
+                        - image
+                    - _target_: src.transforms.ConvertToMultiChannelBasedOnBratsClassesd
+                      keys:
+                        - label
+                    - _target_: monai.transforms.NormalizeIntensityd
+                      channel_wise: true
+                      keys:
+                        - image
+                      nonzero: true
+                    - _target_: monai.transforms.EnsureTyped
+                      keys:
+                        - image
+                        - label
+            train:
+                _target_: monai.transforms.Compose
+                transforms:
+                    - _target_: monai.transforms.LoadImaged
+                      keys:
+                        - image
+                        - label
+                    - _target_: monai.transforms.EnsureChannelFirstd
+                      keys:
+                        - image
+                    - _target_: src.transforms.ConvertToMultiChannelBasedOnBratsClassesd
+                      keys:
+                        - label
+                    - _target_: monai.transforms.CropForegroundd
+                      allow_smaller: true
+                      k_divisible:
+                        - 96
+                        - 96
+                        - 96
+                      keys:
+                        - image
+                        - label
+                      source_key: image
+                    - _target_: monai.transforms.RandSpatialCropd
+                      keys:
+                        - image
+                        - label
+                      random_size: false
+                      roi_size:
+                        - 96
+                        - 96
+                        - 96
+                    - _target_: monai.transforms.RandFlipd
+                      keys:
+                        - image
+                        - label
+                      prob: 0.5
+                      spatial_axis: 0
+                    - _target_: monai.transforms.RandFlipd
+                      keys:
+                        - image
+                        - label
+                      prob: 0.5
+                      spatial_axis: 1
+                    - _target_: monai.transforms.RandFlipd
+                      keys:
+                        - image
+                        - label
+                      prob: 0.5
+                      spatial_axis: 2
+                    - _target_: monai.transforms.NormalizeIntensityd
+                      channel_wise: true
+                      keys:
+                        - image
+                      nonzero: true
+                    - _target_: monai.transforms.RandScaleIntensityd
+                      factors: 0.1
+                      keys:
+                        - image
+                      prob: 1
+                    - _target_: monai.transforms.RandShiftIntensityd
+                      keys:
+                        - image
+                      offsets: 0.1
+                      prob: 1
+                    - _target_: monai.transforms.EnsureTyped
+                      keys:
+                        - image
+                        - label
+writer:
+    value:
+        _target_: src.logger.WandBWriter
+        entity: null
+        id_length: 8
+        log_checkpoints: false
+        loss_names:
+            - loss
+        mode: online
+        project_name: pytorch_template
+        run_name: lmambanet_ratio001_ep20

@@ -1,0 +1,36 @@
+defaults:
+  - model: swin_unetr_brats23
+  - writer: wandb
+  - metrics: brats23_seg
+  - datasets: brats23_cached
+  - dataloader: brats23
+  - transforms: brats23_cached
+  - _self_
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+  weight_decay: 1e-5
+
+lr_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${trainer.n_epochs}
+
+loss_function:
+  _target_: src.loss.DiceSegLoss
+  to_onehot_y: False
+  sigmoid: True
+
+trainer:
+  log_step: 10
+  n_epochs: 100
+  epoch_len: null
+  device_tensors: ["image", "label"]
+  resume_from: null
+  device: auto
+  override: False
+  monitor: "max val_MeanDice"
+  save_period: 10
+  early_stop: ${trainer.n_epochs}
+  save_dir: "saved"
+  seed: 42
