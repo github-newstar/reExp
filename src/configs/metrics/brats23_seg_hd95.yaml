@@ -1,0 +1,59 @@
+train:
+  - _target_: src.metrics.MeanDiceMetric
+    name: "TRAIN_MeanDice"
+    threshold: 0.5
+    apply_sigmoid: True
+
+inference:
+  - _target_: src.metrics.MeanDiceMetric
+    name: "MeanDice"
+    threshold: 0.5
+    apply_sigmoid: True
+  - _target_: src.metrics.ChannelDiceMetric
+    name: "Dice_TC"
+    channel_index: 0
+    threshold: 0.5
+    apply_sigmoid: True
+  - _target_: src.metrics.ChannelDiceMetric
+    name: "Dice_WT"
+    channel_index: 1
+    threshold: 0.5
+    apply_sigmoid: True
+  - _target_: src.metrics.ChannelDiceMetric
+    name: "Dice_ET"
+    channel_index: 2
+    threshold: 0.5
+    apply_sigmoid: True
+  # NOTE: HD95 is intentionally only in inference and should be enabled manually
+  # by switching metrics config to this file.
+  - _target_: src.metrics.MeanHD95Metric
+    name: "HD95_Mean"
+    threshold: 0.5
+    apply_sigmoid: True
+    include_background: True
+    directed: False
+    empty_fallback: 0.0
+  - _target_: src.metrics.ChannelHD95Metric
+    name: "HD95_TC"
+    channel_index: 0
+    threshold: 0.5
+    apply_sigmoid: True
+    include_background: True
+    directed: False
+    empty_fallback: 0.0
+  - _target_: src.metrics.ChannelHD95Metric
+    name: "HD95_WT"
+    channel_index: 1
+    threshold: 0.5
+    apply_sigmoid: True
+    include_background: True
+    directed: False
+    empty_fallback: 0.0
+  - _target_: src.metrics.ChannelHD95Metric
+    name: "HD95_ET"
+    channel_index: 2
+    threshold: 0.5
+    apply_sigmoid: True
+    include_background: True
+    directed: False
+    empty_fallback: 0.0

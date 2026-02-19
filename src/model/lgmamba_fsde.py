@@ -1,24 +1,29 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from src.model.lgmambanet import GTSMambaBottleneck
 from src.model.lmambanet import DIDCBlock
 
 
-class FSDEBlock(nn.Module):
+class LightFSDEBlock(nn.Module):
     """
-    Frequency-Spatial Dual Enhancement block for 3D skip features.
+    Ultra-Lightweight Frequency-Spatial Dual Enhancement block for 3D skips.
 
-    Dual-domain idea is inspired by BraTS-UMamba / HybridMamba style designs:
+    Dual-domain idea is inspired by BraTS-UMamba / HybridMamba:
     fuse local spatial texture with frequency-domain boundary/shape cues.
+
+    Lightweight fix:
+    - Do NOT learn a full-resolution spectrum tensor.
+    - Learn a tiny complex map (8x8x8) and upsample dynamically in forward.
+    - This is a Low-Rank Spectrum Learning strategy for parameter efficiency.
     """
 
-    def __init__(self, channels: int, spatial_size: tuple[int, int, int]):
+    def __init__(self, channels: int):
         super().__init__()
         self.channels = channels
-        self.spatial_size = tuple(int(x) for x in spatial_size)
 
-        # Spatial branch: depthwise separable conv + SiLU.
+        # Spatial branch: 3x3x3 depthwise conv + BN + SiLU.
         self.depthwise = nn.Conv3d(
             channels,
             channels,
@@ -27,59 +32,71 @@ class FSDEBlock(nn.Module):
             groups=channels,
             bias=False,
         )
-        self.pointwise = nn.Conv3d(channels, channels, kernel_size=1, bias=False)
+        self.bn = nn.BatchNorm3d(channels)
         self.spatial_act = nn.SiLU(inplace=True)
 
-        # Frequency branch: learnable complex spectrum modulation.
-        d, h, w = self.spatial_size
-        w_freq = w // 2 + 1
+        # Frequency branch:
+        # Learn a tiny complex weight map independent of input resolution.
+        # Shape: [1, 1, 8, 8, 8, 2] (real/imag), shared across batch/channels.
+        weight_ri = torch.zeros(1, 1, 8, 8, 8, 2)
+        weight_ri[..., 0] = 1.0
+        self.small_weight = nn.Parameter(weight_ri)
+        self._small_weight_bytes = (
+            self.small_weight.numel() * self.small_weight.element_size()
+        )
+        if self._small_weight_bytes >= 10 * 1024:
+            raise ValueError(
+                f"small_weight consumes {self._small_weight_bytes} bytes, "
+                "expected < 10KB."
+            )
 
-        # Store complex weight as real tensor (..., 2) for stable optimization.
-        # shape matches rFFT output: [1, C, D, H, W//2+1] in complex form.
-        weight_ri = torch.zeros(1, channels, d, h, w_freq, 2)
-        weight_ri[..., 0] = 1.0  # real part init to identity, imag part is 0
-        self.spectrum_weight = nn.Parameter(weight_ri)
-
-        self.gate_conv = nn.Conv3d(channels, channels, kernel_size=1, bias=True)
+        # Gate: lightweight 1x1x1 conv to one attention channel, then broadcast.
+        self.gate_conv = nn.Conv3d(channels, 1, kernel_size=1, bias=True)
         self.gate_act = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[1] != self.channels:
             raise ValueError(
-                f"FSDE channel mismatch: expected {self.channels}, got {x.shape[1]}"
-            )
-        if x.shape[2:] != self.spatial_size:
-            raise ValueError(
-                "FSDE spatial mismatch: "
-                f"expected {self.spatial_size}, got {tuple(x.shape[2:])}. "
-                "Set model.input_size to match training ROI size."
+                f"LightFSDE channel mismatch: expected {self.channels}, got {x.shape[1]}"
             )
 
         # 1) Spatial path: local texture/detail extraction.
         x_spatial = self.depthwise(x)
-        x_spatial = self.pointwise(x_spatial)
+        x_spatial = self.bn(x_spatial)
         x_spatial = self.spatial_act(x_spatial)
 
         # 2) Frequency path:
         # - rFFT to frequency domain (captures boundary/shape cues).
         spectrum = torch.fft.rfftn(x, dim=(2, 3, 4))
+        _, _, d, h, w_freq = spectrum.shape
 
-        # - Learnable complex modulation weight.
-        complex_weight = torch.view_as_complex(self.spectrum_weight)
+        # - Low-rank spectrum learning:
+        #   upsample tiny complex map to current FFT resolution.
+        #   interpolate real/imag separately via channel axis.
+        small_ri = self.small_weight.permute(0, 1, 5, 2, 3, 4)  # [1,1,2,8,8,8]
+        small_ri = small_ri.reshape(1, 2, 8, 8, 8)  # [1,2,8,8,8]
+        up_ri = F.interpolate(
+            small_ri,
+            size=(d, h, w_freq),
+            mode="trilinear",
+            align_corners=False,
+        )
+        up_ri = up_ri.reshape(1, 1, 2, d, h, w_freq).permute(0, 1, 3, 4, 5, 2)
+        complex_weight = torch.view_as_complex(up_ri.contiguous())  # [1,1,D,H,Wf]
         modulated = spectrum * complex_weight
 
         # - Back to spatial domain and generate gate map.
         freq_back = torch.fft.irfftn(modulated, s=x.shape[2:], dim=(2, 3, 4))
-        gate = self.gate_act(self.gate_conv(freq_back))
+        attention_map = self.gate_act(self.gate_conv(freq_back))
 
         # 3) Gated residual enhancement (frequency-guided spatial boosting).
-        out = x_spatial * (1.0 + gate)
+        out = x_spatial * (1.0 + attention_map)
         return out
 
 
-class LGMambaFSDENet(nn.Module):
+class LGMambaLightFSDENet(nn.Module):
     """
-    LGMamba variant with FSDE-enhanced skip connections.
+    LGMamba variant with LightFSDE-enhanced skip connections.
     """
 
     def __init__(
@@ -87,21 +104,12 @@ class LGMambaFSDENet(nn.Module):
         in_channels: int = 4,
         out_channels: int = 3,
         feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
-        input_size: tuple[int, int, int] = (96, 96, 96),
         mamba_state: int = 16,
         mamba_conv: int = 4,
         mamba_expand: int = 2,
     ):
         super().__init__()
         c1, c2, c3, c4 = feature_channels
-
-        def down_size(sz: tuple[int, int, int]) -> tuple[int, int, int]:
-            # Conv3d(k=3,s=2,p=1): out = floor((in + 1) / 2)
-            return tuple((int(v) + 1) // 2 for v in sz)
-
-        s1 = tuple(int(v) for v in input_size)
-        s2 = down_size(s1)
-        s3 = down_size(s2)
 
         self.enc1 = DIDCBlock(in_channels, c1)
         self.down1 = nn.Conv3d(c1, c2, kernel_size=3, stride=2, padding=1, bias=False)
@@ -112,10 +120,10 @@ class LGMambaFSDENet(nn.Module):
         self.enc3 = DIDCBlock(c3, c3)
         self.down3 = nn.Conv3d(c3, c4, kernel_size=3, stride=2, padding=1, bias=False)
 
-        # FSDE on skip features: frequency-guided enhancement before decoder fusion.
-        self.skip_fsde1 = FSDEBlock(channels=c1, spatial_size=s1)
-        self.skip_fsde2 = FSDEBlock(channels=c2, spatial_size=s2)
-        self.skip_fsde3 = FSDEBlock(channels=c3, spatial_size=s3)
+        # LightFSDE on skip features: frequency-guided enhancement before decoding.
+        self.skip_fsde1 = LightFSDEBlock(channels=c1)
+        self.skip_fsde2 = LightFSDEBlock(channels=c2)
+        self.skip_fsde3 = LightFSDEBlock(channels=c3)
 
         self.bottleneck = GTSMambaBottleneck(
             channels=c4,
@@ -159,3 +167,10 @@ class LGMambaFSDENet(nn.Module):
 
         logits = self.head(d1)
         return {"logits": logits}
+
+
+class LGMambaFSDENet(LGMambaLightFSDENet):
+    """
+    Backward-compatible alias.
+    Existing configs using `LGMambaFSDENet` now point to the lightweight version.
+    """

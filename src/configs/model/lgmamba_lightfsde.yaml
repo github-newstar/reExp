@@ -1,4 +1,4 @@
-_target_: src.model.LGMambaFSDENet
+_target_: src.model.LGMambaLightFSDENet
 in_channels: 4
 out_channels: 3
 feature_channels: [32, 64, 128, 256]
