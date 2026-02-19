@@ -24,10 +24,12 @@ class GTSMambaBottleneck(nn.Module):
         mamba_state: int = 16,
         mamba_conv: int = 4,
         mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
     ):
         super().__init__()
         if channels < 3:
             raise ValueError(f"channels must be >= 3 for 3-way grouping, got {channels}")
+        self.use_channel_shuffle = bool(use_channel_shuffle)
         from mamba_ssm import Mamba
 
         # Make branch channels equal for stable grouping/shuffle if C % 3 != 0.
@@ -116,7 +118,8 @@ class GTSMambaBottleneck(nn.Module):
         # Concatenate tri-axis outputs and shuffle channels so features from
         # different scan axes can exchange information before pointwise fusion.
         out = torch.cat([out1, out2, out3], dim=1)
-        out = channel_shuffle_3d(out, groups=3)
+        if self.use_channel_shuffle:
+            out = channel_shuffle_3d(out, groups=3)
         out = self.fuse(out)
         return out + residual
 

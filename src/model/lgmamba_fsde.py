@@ -112,18 +112,22 @@ class LGMambaLightFSDENet(nn.Module):
         mamba_conv: int = 4,
         mamba_expand: int = 2,
         deep_supervision: bool = True,
+        use_channel_shuffle: bool = True,
     ):
         super().__init__()
         c1, c2, c3, c4 = feature_channels
         self.deep_supervision = deep_supervision
+        self.use_channel_shuffle = bool(use_channel_shuffle)
 
-        self.enc1 = DIDCBlock(in_channels, c1)
+        self.enc1 = DIDCBlock(
+            in_channels, c1, use_channel_shuffle=self.use_channel_shuffle
+        )
         self.down1 = nn.Conv3d(c1, c2, kernel_size=3, stride=2, padding=1, bias=False)
 
-        self.enc2 = DIDCBlock(c2, c2)
+        self.enc2 = DIDCBlock(c2, c2, use_channel_shuffle=self.use_channel_shuffle)
         self.down2 = nn.Conv3d(c2, c3, kernel_size=3, stride=2, padding=1, bias=False)
 
-        self.enc3 = DIDCBlock(c3, c3)
+        self.enc3 = DIDCBlock(c3, c3, use_channel_shuffle=self.use_channel_shuffle)
         self.down3 = nn.Conv3d(c3, c4, kernel_size=3, stride=2, padding=1, bias=False)
 
         # LightFSDE on skip features: frequency-guided enhancement before decoding.
@@ -136,16 +140,23 @@ class LGMambaLightFSDENet(nn.Module):
             mamba_state=mamba_state,
             mamba_conv=mamba_conv,
             mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
         )
 
         self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
-        self.dec3 = DIDCBlock(c3 + c3, c3)
+        self.dec3 = DIDCBlock(
+            c3 + c3, c3, use_channel_shuffle=self.use_channel_shuffle
+        )
 
         self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
-        self.dec2 = DIDCBlock(c2 + c2, c2)
+        self.dec2 = DIDCBlock(
+            c2 + c2, c2, use_channel_shuffle=self.use_channel_shuffle
+        )
 
         self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
-        self.dec1 = DIDCBlock(c1 + c1, c1)
+        self.dec1 = DIDCBlock(
+            c1 + c1, c1, use_channel_shuffle=self.use_channel_shuffle
+        )
 
         self.head = nn.Conv3d(c1, out_channels, kernel_size=1)
         if self.deep_supervision:
@@ -200,3 +211,32 @@ class LGMambaFSDENet(LGMambaLightFSDENet):
     Backward-compatible alias.
     Existing configs using `LGMambaFSDENet` now point to the lightweight version.
     """
+
+
+class LGMambaLightFSDENoShuffleNet(LGMambaLightFSDENet):
+    """
+    LGMamba LightFSDE variant with channel shuffle disabled in:
+    - DIDC blocks (encoder/decoder)
+    - GTS-Mamba bottleneck fusion
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle=False,
+        )

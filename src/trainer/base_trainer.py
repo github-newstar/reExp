@@ -180,6 +180,87 @@ class BaseTrainer:
         if config.trainer.get("from_pretrained") is not None:
             self._from_pretrained(config.trainer.get("from_pretrained"))
 
+    def _build_et_threshold_search_state(self, part):
+        """
+        Build ET threshold-search state from config.
+
+        The search runs on already-computed logits from the same evaluation pass
+        (no repeated model forward), which keeps overhead low.
+        """
+        cfg = self.cfg_trainer.get("et_threshold_search")
+        if cfg is None or not bool(cfg.get("enabled", False)):
+            return None
+
+        parts = list(cfg.get("parts", ["val"]))
+        if part not in parts:
+            return None
+
+        thresholds = [float(x) for x in cfg.get("thresholds", [0.3, 0.4, 0.5, 0.6])]
+        if len(thresholds) == 0:
+            return None
+
+        return {
+            "thresholds": thresholds,
+            "channel_index": int(cfg.get("channel_index", 2)),
+            "apply_sigmoid": bool(cfg.get("apply_sigmoid", True)),
+            "smooth": float(cfg.get("smooth", 1e-5)),
+            "log_all": bool(cfg.get("log_all", False)),
+            "intersection": [0.0 for _ in thresholds],
+            "pred_sum": [0.0 for _ in thresholds],
+            "target_sum": 0.0,
+        }
+
+    @staticmethod
+    def _update_et_threshold_search_state(state, batch):
+        logits = batch["logits"].detach().float()
+        label = batch["label"].detach().float()
+
+        channel_index = state["channel_index"]
+        if logits.ndim < 2 or label.ndim < 2:
+            raise ValueError("Expected logits/label with channel dimension for ET search.")
+        if channel_index >= logits.shape[1] or channel_index >= label.shape[1]:
+            raise ValueError(
+                f"ET channel index {channel_index} is out of range for logits={tuple(logits.shape)} "
+                f"and label={tuple(label.shape)}"
+            )
+
+        if state["apply_sigmoid"]:
+            probs = torch.sigmoid(logits[:, channel_index])
+        else:
+            probs = logits[:, channel_index]
+        target = label[:, channel_index]
+
+        target_cpu = target.cpu()
+        probs_cpu = probs.cpu()
+        state["target_sum"] += float(target_cpu.sum().item())
+
+        for idx, threshold in enumerate(state["thresholds"]):
+            pred = (probs_cpu > threshold).float()
+            state["intersection"][idx] += float((pred * target_cpu).sum().item())
+            state["pred_sum"][idx] += float(pred.sum().item())
+
+    @staticmethod
+    def _finalize_et_threshold_search_state(state):
+        smooth = state["smooth"]
+        dice_scores = []
+        for idx in range(len(state["thresholds"])):
+            numerator = 2.0 * state["intersection"][idx] + smooth
+            denominator = state["pred_sum"][idx] + state["target_sum"] + smooth
+            dice_scores.append(float(numerator / denominator))
+
+        best_idx = max(range(len(dice_scores)), key=lambda i: dice_scores[i])
+        logs = {
+            "ET_Search_BestDice": dice_scores[best_idx],
+            "ET_Search_BestThreshold": float(state["thresholds"][best_idx]),
+        }
+
+        if state["log_all"]:
+            for threshold, score in zip(state["thresholds"], dice_scores):
+                key = f"ET_Search_Dice_t{int(round(threshold * 100)):03d}"
+                logs[key] = float(score)
+
+        return logs
+
     def train(self):
         """
         Wrapper around training process to save model on keyboard interrupt.
@@ -301,6 +382,7 @@ class BaseTrainer:
         self.is_train = False
         self.model.eval()
         self.evaluation_metrics.reset()
+        et_search_state = self._build_et_threshold_search_state(part=part)
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader),
@@ -311,13 +393,22 @@ class BaseTrainer:
                     batch,
                     metrics=self.evaluation_metrics,
                 )
+                if et_search_state is not None:
+                    self._update_et_threshold_search_state(et_search_state, batch)
             self.writer.set_step(epoch * self.epoch_len, part)
             self._log_scalars(self.evaluation_metrics)
             self._log_batch(
                 batch_idx, batch, part
             )  # log only the last batch during inference
 
-        return self.evaluation_metrics.result()
+        logs = self.evaluation_metrics.result()
+        if et_search_state is not None:
+            et_logs = self._finalize_et_threshold_search_state(et_search_state)
+            logs.update(et_logs)
+            for key, value in et_logs.items():
+                self.writer.add_scalar(key, value)
+
+        return logs
 
     def _monitor_performance(self, logs, not_improved_count):
         """

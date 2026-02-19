@@ -28,9 +28,15 @@ class DIDCBlock(nn.Module):
     - Channel shuffle after branch concatenation follows MedMamba-style inter-branch mixing.
     """
 
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        use_channel_shuffle: bool = True,
+    ):
         super().__init__()
         reduced_channels = max(in_channels // 2, 1)
+        self.use_channel_shuffle = bool(use_channel_shuffle)
 
         # Step 1: projection (reduce channels by half)
         self.proj = nn.Sequential(
@@ -94,7 +100,8 @@ class DIDCBlock(nn.Module):
         branch_c = self.branch_c(x)
 
         x = torch.cat([branch_a, branch_b, branch_c], dim=1)
-        x = channel_shuffle_3d(x, groups=3)
+        if self.use_channel_shuffle:
+            x = channel_shuffle_3d(x, groups=3)
         x = self.fuse(x)
         return x + residual
 
