@@ -1,12 +1,6 @@
 train:
   _target_: monai.transforms.Compose
   transforms:
-    - _target_: monai.transforms.LoadImaged
-      keys: ["image", "label"]
-    - _target_: monai.transforms.EnsureChannelFirstd
-      keys: ["image"]
-    - _target_: src.transforms.ConvertToMultiChannelBasedOnBratsClassesd
-      keys: ["label"]
     - _target_: monai.transforms.CropForegroundd
       keys: ["image", "label"]
       source_key: "image"
@@ -31,10 +25,6 @@ train:
       keys: ["image", "label"]
       prob: 0.5
       spatial_axis: 2
-    - _target_: monai.transforms.NormalizeIntensityd
-      keys: ["image"]
-      nonzero: True
-      channel_wise: True
     - _target_: monai.transforms.RandScaleIntensityd
       keys: ["image"]
       factors: 0.1
