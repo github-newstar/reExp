@@ -6,10 +6,13 @@ train:
       source_key: "image"
       k_divisible: [96, 96, 96]
       allow_smaller: True
-    - _target_: monai.transforms.RandSpatialCropd
+    - _target_: src.transforms.RandETFocusedCropd
       keys: ["image", "label"]
       roi_size: [96, 96, 96]
-      random_size: False
+      label_key: "label"
+      et_channel: 2
+      wt_channel: 1
+      et_focus_prob: 0.7
     - _target_: monai.transforms.RandFlipd
       keys: ["image", "label"]
       prob: 0.5
