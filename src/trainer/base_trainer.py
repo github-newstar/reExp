@@ -1,6 +1,7 @@
 from abc import abstractmethod
 
 import torch
+import torch.distributed as dist
 from numpy import inf
 from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
@@ -30,6 +31,9 @@ class BaseTrainer:
         epoch_len=None,
         skip_oom=True,
         batch_transforms=None,
+        rank=0,
+        world_size=1,
+        is_distributed=False,
     ):
         """
         Args:
@@ -62,6 +66,10 @@ class BaseTrainer:
 
         self.device = device
         self.skip_oom = skip_oom
+        self.rank = int(rank)
+        self.world_size = int(world_size)
+        self.is_distributed = bool(is_distributed)
+        self.is_main_process = self.rank == 0
 
         self.logger = logger
         self.log_step = config.trainer.get("log_step", 50)
@@ -128,9 +136,20 @@ class BaseTrainer:
             self.train_dataloader = inf_loop(self.train_dataloader)
             self.epoch_len = epoch_len
 
-        self.evaluation_dataloaders = {
-            k: v for k, v in dataloaders.items() if k != "train"
-        }
+        # By default, train-time evaluation only runs on validation set.
+        # test should be executed separately via inference script.
+        eval_partitions = list(self.cfg_trainer.get("eval_partitions", ["val"]))
+        if len(eval_partitions) == 0:
+            self.logger.warning(
+                "trainer.eval_partitions is empty. No evaluation partition will run during training."
+            )
+        unknown_parts = [p for p in eval_partitions if p not in dataloaders]
+        if unknown_parts:
+            raise ValueError(
+                f"Unknown trainer.eval_partitions={unknown_parts}. "
+                f"Available dataloaders are: {list(dataloaders.keys())}"
+            )
+        self.evaluation_dataloaders = {k: dataloaders[k] for k in eval_partitions}
 
         # define epochs
         self._last_epoch = 0  # required for saving on interruption
@@ -297,18 +316,27 @@ class BaseTrainer:
             logs = {"epoch": epoch}
             logs.update(result)
 
-            # print logged information to the screen
-            for key, value in logs.items():
-                self.logger.info(f"    {key:15s}: {value}")
+            if self.is_main_process:
+                # print logged information to the screen
+                for key, value in logs.items():
+                    self.logger.info(f"    {key:15s}: {value}")
 
-            # evaluate model performance according to configured metric,
-            # save best checkpoint as model_best
-            best, stop_process, not_improved_count = self._monitor_performance(
-                logs, not_improved_count
-            )
+                # evaluate model performance according to configured metric,
+                # save best checkpoint as model_best
+                best, stop_process, not_improved_count = self._monitor_performance(
+                    logs, not_improved_count
+                )
+            else:
+                best = False
+                stop_process = False
+
+            best, stop_process = self._sync_control_flags(best, stop_process)
 
             if epoch % self.save_period == 0 or best:
                 self._save_checkpoint(epoch, save_best=best, only_best=True)
+
+            if self.is_distributed and dist.is_available() and dist.is_initialized():
+                dist.barrier()
 
             if stop_process:  # early_stop
                 break
@@ -327,10 +355,19 @@ class BaseTrainer:
         self.is_train = True
         self.model.train()
         self.train_metrics.reset()
+        train_sampler = getattr(self.train_dataloader, "sampler", None)
+        if train_sampler is not None and hasattr(train_sampler, "set_epoch"):
+            train_sampler.set_epoch(epoch)
         self.writer.set_step((epoch - 1) * self.epoch_len)
         self.writer.add_scalar("epoch", epoch)
+        last_train_metrics = self.train_metrics.result()
         for batch_idx, batch in enumerate(
-            tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
+            tqdm(
+                self.train_dataloader,
+                desc="train",
+                total=self.epoch_len,
+                disable=not self.is_main_process,
+            )
         ):
             try:
                 batch = self.process_batch(
@@ -372,10 +409,11 @@ class BaseTrainer:
         if self.lr_scheduler is not None and self.lr_scheduler_step_per == "epoch":
             self.lr_scheduler.step()
 
-        # Run val/test
-        for part, dataloader in self.evaluation_dataloaders.items():
-            val_logs = self._evaluation_epoch(epoch, part, dataloader)
-            logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
+        # Run val/test on the main process in DDP mode.
+        if (not self.is_distributed) or self.is_main_process:
+            for part, dataloader in self.evaluation_dataloaders.items():
+                val_logs = self._evaluation_epoch(epoch, part, dataloader)
+                logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
 
         return logs
 
@@ -399,6 +437,7 @@ class BaseTrainer:
                 enumerate(dataloader),
                 desc=part,
                 total=len(dataloader),
+                disable=not self.is_main_process,
             ):
                 batch = self.process_batch(
                     batch,
@@ -602,13 +641,19 @@ class BaseTrainer:
                 'model_best.pth'(do not duplicate the checkpoint as
                 checkpoint-epochEpochNumber.pth)
         """
-        arch = type(self.model).__name__
+        if not self.is_main_process:
+            return
+
+        model_to_save = self._model_for_state_dict()
+        arch = type(model_to_save).__name__
         state = {
             "arch": arch,
             "epoch": epoch,
-            "state_dict": self.model.state_dict(),
+            "state_dict": model_to_save.state_dict(),
             "optimizer": self.optimizer.state_dict(),
-            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "lr_scheduler": self.lr_scheduler.state_dict()
+            if self.lr_scheduler is not None
+            else None,
             "monitor_best": self.mnt_best,
             "config": self.config,
         }
@@ -649,7 +694,7 @@ class BaseTrainer:
                 "Warning: Architecture configuration given in the config file is different from that "
                 "of the checkpoint. This may yield an exception when state_dict is loaded."
             )
-        self.model.load_state_dict(checkpoint["state_dict"])
+        self._model_for_state_dict().load_state_dict(checkpoint["state_dict"])
 
         # load optimizer state from checkpoint only when optimizer type is not changed.
         if (
@@ -663,7 +708,8 @@ class BaseTrainer:
             )
         else:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
-            self.lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+            if self.lr_scheduler is not None and checkpoint["lr_scheduler"] is not None:
+                self.lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
 
         self.logger.info(
             f"Checkpoint loaded. Resume training from epoch {self.start_epoch}"
@@ -688,6 +734,31 @@ class BaseTrainer:
         checkpoint = torch.load(pretrained_path, self.device)
 
         if checkpoint.get("state_dict") is not None:
-            self.model.load_state_dict(checkpoint["state_dict"])
+            self._model_for_state_dict().load_state_dict(checkpoint["state_dict"])
         else:
-            self.model.load_state_dict(checkpoint)
+            self._model_for_state_dict().load_state_dict(checkpoint)
+
+    def _model_for_state_dict(self):
+        """
+        Return the underlying model to save/load state_dict.
+        Works for both plain nn.Module and DistributedDataParallel.
+        """
+        if hasattr(self.model, "module"):
+            return self.model.module
+        return self.model
+
+    def _sync_control_flags(self, best, stop_process):
+        """
+        Synchronize control flags (best/early-stop) from rank 0 to all ranks.
+        """
+        if not (self.is_distributed and dist.is_available() and dist.is_initialized()):
+            return best, stop_process
+
+        device = self.device if str(self.device).startswith("cuda") else "cpu"
+        flags = torch.tensor(
+            [int(bool(best)), int(bool(stop_process))],
+            dtype=torch.int32,
+            device=device,
+        )
+        dist.broadcast(flags, src=0)
+        return bool(flags[0].item()), bool(flags[1].item())

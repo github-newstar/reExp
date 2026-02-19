@@ -27,6 +27,11 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+try:
+    import SimpleITK as sitk
+except Exception:  # pragma: no cover - optional dependency for N4 correction
+    sitk = None
+
 BRATS_MODALITIES = ("t2f", "t1c", "t1n", "t2w")
 
 
@@ -134,6 +139,57 @@ def maybe_write_uncompressed_nifti(src_nii_gz: Path, dst_nii: Path) -> None:
     nib.save(nii_obj, str(dst_nii))
 
 
+def load_nifti_array_with_optional_n4(
+    nii_path: Path,
+    enable_n4: bool,
+    n4_shrink_factor: int,
+    n4_iterations: tuple[int, ...],
+) -> np.ndarray:
+    """
+    Load a scalar NIfTI volume as float32 and optionally apply N4 bias correction.
+
+    N4 is applied in array space:
+    - Convert [X, Y, Z] -> [Z, Y, X] for SimpleITK.
+    - Build Otsu foreground mask.
+    - Run N4 on a shrunk image for speed, then recover full-resolution bias field.
+    - Convert back to [X, Y, Z].
+    """
+    image = nib.load(str(nii_path)).get_fdata(dtype=np.float32)
+    if not enable_n4:
+        return image
+
+    if sitk is None:
+        raise ImportError(
+            "N4 bias correction requires SimpleITK. "
+            "Please install dependency 'simpleitk' and rerun."
+        )
+
+    if n4_shrink_factor < 1:
+        raise ValueError(f"n4_shrink_factor must be >= 1, got {n4_shrink_factor}")
+    if len(n4_iterations) == 0:
+        raise ValueError("n4_iterations must contain at least one level.")
+
+    image_zyx = np.transpose(image, (2, 1, 0))
+    sitk_image = sitk.GetImageFromArray(image_zyx)
+    mask = sitk.OtsuThreshold(sitk_image, 0, 1, 200)
+
+    corrector = sitk.N4BiasFieldCorrectionImageFilter()
+    corrector.SetMaximumNumberOfIterations([int(x) for x in n4_iterations])
+
+    if n4_shrink_factor > 1:
+        shrink = [int(n4_shrink_factor)] * 3
+        image_small = sitk.Shrink(sitk_image, shrink)
+        mask_small = sitk.Shrink(mask, shrink)
+        corrector.Execute(image_small, mask_small)
+        log_bias_full = corrector.GetLogBiasFieldAsImage(sitk_image)
+        corrected = sitk_image / sitk.Exp(log_bias_full)
+    else:
+        corrected = corrector.Execute(sitk_image, mask)
+
+    corrected_zyx = sitk.GetArrayFromImage(corrected).astype(np.float32, copy=False)
+    return np.transpose(corrected_zyx, (2, 1, 0))
+
+
 def build_case_paths(case_dir: Path):
     case_id = case_dir.name
     image_paths = [case_dir / f"{case_id}-{mod}.nii.gz" for mod in BRATS_MODALITIES]
@@ -153,6 +209,9 @@ def prepare_cache(
     min_size: tuple[int, int, int],
     k_divisible: int,
     image_dtype: str,
+    n4_correct: bool,
+    n4_shrink_factor: int,
+    n4_iterations: tuple[int, ...],
 ) -> None:
     data_dir = data_dir.expanduser().resolve()
     cache_dir = cache_dir.expanduser().resolve()
@@ -192,7 +251,12 @@ def prepare_cache(
             )
 
         image_arrays = [
-            nib.load(str(path)).get_fdata(dtype=np.float32)
+            load_nifti_array_with_optional_n4(
+                nii_path=path,
+                enable_n4=n4_correct,
+                n4_shrink_factor=n4_shrink_factor,
+                n4_iterations=n4_iterations,
+            )
             for path in image_paths
         ]
         image = np.stack(image_arrays, axis=0)  # [4, D, H, W]
@@ -228,6 +292,9 @@ def prepare_cache(
                 "cropped_shape": [int(x) for x in image.shape[1:]],
                 "bbox_start": [int(x) for x in bbox_start],
                 "bbox_end": [int(x) for x in bbox_end],
+                "n4_corrected": bool(n4_correct),
+                "n4_shrink_factor": int(n4_shrink_factor),
+                "n4_iterations": [int(x) for x in n4_iterations],
             },
         }
         torch.save(payload, vector_path)
@@ -300,6 +367,24 @@ def parse_args():
         default="float16",
         help="Image tensor dtype stored in vectors.",
     )
+    parser.add_argument(
+        "--n4-correct",
+        action="store_true",
+        help="Apply N4 bias field correction to each MRI modality before normalization.",
+    )
+    parser.add_argument(
+        "--n4-shrink-factor",
+        type=int,
+        default=2,
+        help="N4 shrink factor for faster correction (1 means full resolution).",
+    )
+    parser.add_argument(
+        "--n4-iterations",
+        type=int,
+        nargs="+",
+        default=[50, 50, 30, 20],
+        help="N4 max iterations per level, e.g. 50 50 30 20.",
+    )
     return parser.parse_args()
 
 
@@ -315,6 +400,9 @@ def main():
         min_size=tuple(args.min_size),
         k_divisible=args.k_divisible,
         image_dtype=args.image_dtype,
+        n4_correct=args.n4_correct,
+        n4_shrink_factor=args.n4_shrink_factor,
+        n4_iterations=tuple(args.n4_iterations),
     )
 
 

@@ -3,6 +3,7 @@ from src.model.lgmamba_fsde import (
     LGMambaFSDENet,
     LGMambaLightFSDENet,
     LGMambaLightFSDENoShuffleNet,
+    LGMambaLightFSDEShallowPlainNet,
 )
 from src.model.lgmambanet import LGMambaNet
 from src.model.lmambanet import LMambaNet
@@ -14,6 +15,7 @@ __all__ = [
     "LGMambaFSDENet",
     "LGMambaLightFSDENet",
     "LGMambaLightFSDENoShuffleNet",
+    "LGMambaLightFSDEShallowPlainNet",
     "LGMambaNet",
     "LMambaNet",
     "SwinUNETRSegModel",

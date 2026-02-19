@@ -29,6 +29,10 @@ writer:
 trainer:
   log_step: 10
   n_epochs: 100
+  ddp:
+    enabled: auto
+    backend: nccl
+    find_unused_parameters: false
   lr_scheduler_step_per: epoch
   warmup:
     enabled: False

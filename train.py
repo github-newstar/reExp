@@ -1,4 +1,5 @@
 import warnings
+import logging
 
 import hydra
 import torch
@@ -6,10 +7,31 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from src.datasets.data_utils import get_dataloaders
+from src.logger import NullWriter
 from src.trainer import Trainer
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
+from src.utils.distributed import (
+    barrier,
+    cleanup_distributed,
+    init_distributed_from_config,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
+
+
+def _setup_worker_logger(rank):
+    logger = logging.getLogger(f"train.rank{rank}")
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter(
+                "[%(asctime)s][%(levelname)s][%(name)s] %(message)s"
+            )
+        )
+        logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    return logger
 
 
 def _build_lr_scheduler(config, optimizer, train_dataloader, logger):
@@ -97,60 +119,99 @@ def main(config):
     Args:
         config (DictConfig): hydra experiment config.
     """
+    ddp_state = init_distributed_from_config(config)
+    is_distributed = bool(ddp_state["enabled"])
+    rank = int(ddp_state["rank"])
+    world_size = int(ddp_state["world_size"])
+    is_main = rank == 0
+    device = ddp_state["device"]
+
     set_random_seed(config.trainer.seed)
 
     project_config = OmegaConf.to_container(config)
-    logger = setup_saving_and_logging(config)
-    writer = instantiate(config.writer, logger, project_config)
+    logger = setup_saving_and_logging(config) if is_main else _setup_worker_logger(rank)
+    if is_distributed:
+        barrier()
 
-    if config.trainer.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    else:
-        device = config.trainer.device
-
-    # setup data_loader instances
-    # batch_transforms should be put on device
-    dataloaders, batch_transforms = get_dataloaders(config, device)
-
-    # build model architecture, then print to console
-    model = instantiate(config.model).to(device)
-    logger.info(model)
-
-    # get function handles of loss and metrics
-    loss_function = instantiate(config.loss_function).to(device)
-    metrics = instantiate(config.metrics)
-
-    # build optimizer, learning rate scheduler
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = instantiate(config.optimizer, params=trainable_params)
-    lr_scheduler = _build_lr_scheduler(
-        config=config,
-        optimizer=optimizer,
-        train_dataloader=dataloaders["train"],
-        logger=logger,
+    writer = (
+        instantiate(config.writer, logger, project_config)
+        if is_main
+        else NullWriter(logger, project_config)
     )
 
-    # epoch_len = number of iterations for iteration-based training
-    # epoch_len = None or len(dataloader) for epoch-based training
-    epoch_len = config.trainer.get("epoch_len")
+    try:
+        # setup data_loader instances
+        # batch_transforms should be put on device
+        dataloaders, batch_transforms = get_dataloaders(
+            config,
+            device,
+            distributed=is_distributed,
+            rank=rank,
+            world_size=world_size,
+        )
 
-    trainer = Trainer(
-        model=model,
-        criterion=loss_function,
-        metrics=metrics,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
-        config=config,
-        device=device,
-        dataloaders=dataloaders,
-        epoch_len=epoch_len,
-        logger=logger,
-        writer=writer,
-        batch_transforms=batch_transforms,
-        skip_oom=config.trainer.get("skip_oom", True),
-    )
+        # build model architecture, then print to console
+        model = instantiate(config.model).to(device)
+        if is_main:
+            logger.info(model)
 
-    trainer.train()
+        if is_distributed:
+            ddp_cfg = config.trainer.get("ddp", {})
+            find_unused = bool(ddp_cfg.get("find_unused_parameters", False))
+            if str(device).startswith("cuda"):
+                local_rank = int(ddp_state["local_rank"])
+                model = torch.nn.parallel.DistributedDataParallel(
+                    model,
+                    device_ids=[local_rank],
+                    output_device=local_rank,
+                    find_unused_parameters=find_unused,
+                )
+            else:
+                model = torch.nn.parallel.DistributedDataParallel(
+                    model,
+                    find_unused_parameters=find_unused,
+                )
+
+        # get function handles of loss and metrics
+        loss_function = instantiate(config.loss_function).to(device)
+        metrics = instantiate(config.metrics)
+
+        # build optimizer, learning rate scheduler
+        trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+        optimizer = instantiate(config.optimizer, params=trainable_params)
+        lr_scheduler = _build_lr_scheduler(
+            config=config,
+            optimizer=optimizer,
+            train_dataloader=dataloaders["train"],
+            logger=logger,
+        )
+
+        # epoch_len = number of iterations for iteration-based training
+        # epoch_len = None or len(dataloader) for epoch-based training
+        epoch_len = config.trainer.get("epoch_len")
+
+        trainer = Trainer(
+            model=model,
+            criterion=loss_function,
+            metrics=metrics,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            config=config,
+            device=device,
+            dataloaders=dataloaders,
+            epoch_len=epoch_len,
+            logger=logger,
+            writer=writer,
+            batch_transforms=batch_transforms,
+            skip_oom=config.trainer.get("skip_oom", True),
+            rank=rank,
+            world_size=world_size,
+            is_distributed=is_distributed,
+        )
+
+        trainer.train()
+    finally:
+        cleanup_distributed()
 
 
 if __name__ == "__main__":

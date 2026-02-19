@@ -6,6 +6,43 @@ from src.model.lgmambanet import GTSMambaBottleneck
 from src.model.lmambanet import DIDCBlock
 
 
+class ShallowDWConvResidualBlock(nn.Module):
+    """
+    Shallow plain feature block:
+    DW-Conv3D -> BatchNorm3d -> ReLU with a simple residual connection.
+
+    Design goal:
+    avoid channel-attention/channel-shuffle bias in shallow stages so weak
+    ET boundary cues are preserved as much as possible.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.in_proj = (
+            nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False)
+            if in_channels != out_channels
+            else nn.Identity()
+        )
+        self.dw_conv = nn.Conv3d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+            groups=out_channels,
+            bias=False,
+        )
+        self.bn = nn.BatchNorm3d(out_channels)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.in_proj(x)
+        residual = x
+        x = self.dw_conv(x)
+        x = self.bn(x)
+        x = self.act(x)
+        return x + residual
+
+
 class LightFSDEBlock(nn.Module):
     """
     Ultra-Lightweight Frequency-Spatial Dual Enhancement block for 3D skips.
@@ -240,3 +277,39 @@ class LGMambaLightFSDENoShuffleNet(LGMambaLightFSDENet):
             deep_supervision=deep_supervision,
             use_channel_shuffle=False,
         )
+
+
+class LGMambaLightFSDEShallowPlainNet(LGMambaLightFSDENet):
+    """
+    LGMamba LightFSDE variant with plain shallow stages (Stage 1/2):
+    - Remove channel attention/shuffle from shallow feature extraction.
+    - Use only DW-Conv3D -> BN -> ReLU + residual in shallow encoder.
+    - Keep deep stages and bottleneck unchanged for fair ablation.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle=use_channel_shuffle_deep,
+        )
+        c1, c2, _, _ = feature_channels
+
+        # Replace shallow DIDC blocks with plain depthwise residual blocks.
+        self.enc1 = ShallowDWConvResidualBlock(in_channels, c1)
+        self.enc2 = ShallowDWConvResidualBlock(c2, c2)

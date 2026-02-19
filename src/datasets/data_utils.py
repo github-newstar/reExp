@@ -1,6 +1,7 @@
 from itertools import repeat
 
 from hydra.utils import instantiate
+from torch.utils.data.distributed import DistributedSampler
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
@@ -43,7 +44,7 @@ def move_batch_transforms_to_device(batch_transforms, device):
                 transforms[transform_name] = transforms[transform_name].to(device)
 
 
-def get_dataloaders(config, device):
+def get_dataloaders(config, device, distributed=False, rank=0, world_size=1):
     """
     Create dataloaders for each of the dataset partitions.
     Also creates instance and batch transforms.
@@ -65,6 +66,11 @@ def get_dataloaders(config, device):
     # dataset partitions init
     datasets = instantiate(config.datasets)  # instance transforms are defined inside
 
+    if distributed and world_size < 2:
+        raise ValueError(
+            f"distributed=True requires world_size >= 2, got world_size={world_size}"
+        )
+
     # dataloaders init
     dataloaders = {}
     for dataset_partition in config.datasets.keys():
@@ -75,12 +81,31 @@ def get_dataloaders(config, device):
             f"be larger than the dataset length ({len(dataset)})"
         )
 
+        is_train_partition = dataset_partition == "train"
+        sampler = None
+        shuffle = is_train_partition
+
+        if distributed and is_train_partition:
+            if len(dataset) < world_size:
+                raise ValueError(
+                    f"Train dataset too small for DDP: len(dataset)={len(dataset)} < world_size={world_size}"
+                )
+            sampler = DistributedSampler(
+                dataset=dataset,
+                num_replicas=world_size,
+                rank=rank,
+                shuffle=True,
+                drop_last=True,
+            )
+            shuffle = False
+
         partition_dataloader = instantiate(
             config.dataloader,
             dataset=dataset,
             collate_fn=collate_fn,
-            drop_last=(dataset_partition == "train"),
-            shuffle=(dataset_partition == "train"),
+            drop_last=is_train_partition,
+            shuffle=shuffle,
+            sampler=sampler,
             worker_init_fn=set_worker_seed,
         )
         dataloaders[dataset_partition] = partition_dataloader

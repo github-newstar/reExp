@@ -18,6 +18,7 @@ dependencies = [
     "monai>=1.5.2",
     "scipy",
     "nibabel",
+    "simpleitk",
     "einops",
 ]
 
