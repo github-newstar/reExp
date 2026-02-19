@@ -1,6 +1,6 @@
 train:
-  _target_: src.datasets.BraTS23Dataset
-  data_dir: "/path/to/BraTS23-GLI-TrainingData"
+  _target_: src.datasets.BraTS23CachedVectorDataset
+  cache_dir: "data/cached/brats23"
   partition: "train"
   usage_ratio: 1.0
   split_strategy: "three_way"
@@ -9,7 +9,6 @@ train:
   fold: 0
   n_folds: 5
   seed: 42
-  require_label: True
   instance_transforms: ${transforms.instance_transforms.train}
 
 val:

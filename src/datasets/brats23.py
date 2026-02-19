@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
+from tqdm.auto import tqdm
 
 BRATS23_MODALITIES = ("t2f", "t1c", "t1n", "t2w")
 
@@ -169,6 +170,7 @@ class BraTS23Dataset(Dataset):
         seed=42,
         require_label=True,
         instance_transforms=None,
+        cache_in_memory=False,
     ):
         """
         Args:
@@ -184,6 +186,8 @@ class BraTS23Dataset(Dataset):
             require_label (bool): if True, skip samples without labels.
             instance_transforms (Callable | None): transform pipeline applied
                 to each sample dict.
+            cache_in_memory (bool): if True, preload transformed samples
+                into RAM at startup (recommended for val/test only).
         """
         if partition not in {"train", "val", "test", "all"}:
             raise ValueError(
@@ -225,15 +229,32 @@ class BraTS23Dataset(Dataset):
                 )
 
         self.instance_transforms = instance_transforms
+        self.cache_in_memory = bool(cache_in_memory)
+        self._memory_cache = None
+        if self.cache_in_memory:
+            # Load + transform once from original .nii.gz files, then reuse in RAM.
+            self._memory_cache = [
+                self._load_and_transform(i)
+                for i in tqdm(
+                    range(len(self._index)),
+                    desc=f"Caching {partition} in memory",
+                )
+            ]
 
     def __len__(self):
-        return len(self._index)
+        return len(self._memory_cache) if self._memory_cache is not None else len(self._index)
 
-    def __getitem__(self, ind):
+    def _load_and_transform(self, ind):
         sample = deepcopy(self._index[ind])
         if self.instance_transforms is not None:
             sample = self.instance_transforms(sample)
         return sample
+
+    def __getitem__(self, ind):
+        if self._memory_cache is not None:
+            # Return a copy so per-batch device moves do not mutate cached items.
+            return deepcopy(self._memory_cache[ind])
+        return self._load_and_transform(ind)
 
 
 def _read_cached_index(cache_dir):

@@ -1,6 +1,7 @@
 from itertools import repeat
 
 from hydra.utils import instantiate
+from omegaconf import OmegaConf
 from torch.utils.data.distributed import DistributedSampler
 
 from src.datasets.collate import collate_fn
@@ -73,15 +74,21 @@ def get_dataloaders(config, device, distributed=False, rank=0, world_size=1):
 
     # dataloaders init
     dataloaders = {}
+    train_batch_size = int(config.dataloader.batch_size)
+    eval_batch_size = int(config.dataloader.get("eval_batch_size", train_batch_size))
+    dataloader_cfg = OmegaConf.to_container(config.dataloader, resolve=True)
+    if "eval_batch_size" in dataloader_cfg:
+        dataloader_cfg.pop("eval_batch_size")
     for dataset_partition in config.datasets.keys():
         dataset = datasets[dataset_partition]
+        is_train_partition = dataset_partition == "train"
+        current_batch_size = train_batch_size if is_train_partition else eval_batch_size
 
-        assert config.dataloader.batch_size <= len(dataset), (
-            f"The batch size ({config.dataloader.batch_size}) cannot "
+        assert current_batch_size <= len(dataset), (
+            f"The batch size ({current_batch_size}) cannot "
             f"be larger than the dataset length ({len(dataset)})"
         )
 
-        is_train_partition = dataset_partition == "train"
         sampler = None
         shuffle = is_train_partition
 
@@ -100,8 +107,9 @@ def get_dataloaders(config, device, distributed=False, rank=0, world_size=1):
             shuffle = False
 
         partition_dataloader = instantiate(
-            config.dataloader,
+            dataloader_cfg,
             dataset=dataset,
+            batch_size=current_batch_size,
             collate_fn=collate_fn,
             drop_last=is_train_partition,
             shuffle=shuffle,
