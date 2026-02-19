@@ -1,5 +1,7 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
+import math
 
 
 def channel_shuffle_3d(x: torch.Tensor, groups: int) -> torch.Tensor:
@@ -25,7 +27,7 @@ class DIDCBlock(nn.Module):
 
     Design notes:
     - Multi-scale dilated depthwise branches follow the EMCAD multi-receptive-field idea.
-    - Channel shuffle after branch concatenation follows MedMamba-style inter-branch mixing.
+    - ECA replaces hard channel shuffle with adaptive soft channel interaction.
     """
 
     def __init__(
@@ -76,6 +78,11 @@ class DIDCBlock(nn.Module):
 
         # Step 3: shuffle and fuse (restore channels)
         fused_channels = reduced_channels * 3
+        self.channel_interaction = (
+            ECABlock3D(channels=fused_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
         self.fuse = nn.Sequential(
             nn.Conv3d(fused_channels, out_channels, kernel_size=1, bias=False),
             nn.InstanceNorm3d(out_channels),
@@ -100,10 +107,55 @@ class DIDCBlock(nn.Module):
         branch_c = self.branch_c(x)
 
         x = torch.cat([branch_a, branch_b, branch_c], dim=1)
-        if self.use_channel_shuffle:
-            x = channel_shuffle_3d(x, groups=3)
+        x = self.channel_interaction(x)
         x = self.fuse(x)
         return x + residual
+
+
+def _eca_kernel_size(channels: int, gamma: float = 2.0, b: float = 1.0) -> int:
+    """
+    Adaptive odd kernel size from ECA:
+    k = odd(|log2(C)/gamma + b/gamma|)
+    """
+    if channels <= 0:
+        raise ValueError(f"channels must be positive, got {channels}")
+    t = int(abs((math.log2(float(channels)) / gamma) + (b / gamma)))
+    k = t if t % 2 == 1 else t + 1
+    return max(1, k)
+
+
+class ECABlock3D(nn.Module):
+    """
+    Efficient Channel Attention for 3D tensors (B, C, D, H, W).
+
+    Workflow:
+    1) Global Average Pooling on spatial dims -> (B, C, 1, 1, 1)
+    2) 1D conv on channel descriptor for local cross-channel interaction
+    3) Sigmoid gating and channel-wise rescaling
+    """
+
+    def __init__(self, channels: int, gamma: float = 2.0, b: float = 1.0):
+        super().__init__()
+        kernel_size = _eca_kernel_size(channels=channels, gamma=gamma, b=b)
+        self.conv = nn.Conv1d(
+            in_channels=1,
+            out_channels=1,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False,
+        )
+        self.act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # GAP: (B, C, D, H, W) -> (B, C, 1, 1, 1)
+        y = F.adaptive_avg_pool3d(x, output_size=1)
+        # 1D conv over channel axis: (B, C, 1, 1, 1) -> (B, 1, C)
+        y = y.squeeze(-1).squeeze(-1).squeeze(-1).unsqueeze(1)
+        y = self.conv(y)
+        y = self.act(y)
+        # Back to channel gate and rescale.
+        y = y.squeeze(1).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        return x * y
 
 
 class VSSBottleneck(nn.Module):

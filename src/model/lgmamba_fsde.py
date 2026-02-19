@@ -215,9 +215,9 @@ class LGMambaFSDENet(LGMambaLightFSDENet):
 
 class LGMambaLightFSDENoShuffleNet(LGMambaLightFSDENet):
     """
-    LGMamba LightFSDE variant with channel shuffle disabled in:
+    LGMamba LightFSDE variant with channel interaction disabled in:
     - DIDC blocks (encoder/decoder)
-    - GTS-Mamba bottleneck fusion
+    - GTS-Mamba bottleneck fusion (ECA disabled)
     """
 
     def __init__(

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from src.model.lmambanet import DIDCBlock, channel_shuffle_3d
+from src.model.lmambanet import DIDCBlock, ECABlock3D
 
 
 class GTSMambaBottleneck(nn.Module):
@@ -14,8 +14,8 @@ class GTSMambaBottleneck(nn.Module):
     - Branch 2: Depth-axis scan across slices (captures volumetric continuity).
     - Branch 3: Global flatten scan (captures long-range global dependencies).
 
-    Then branch outputs are concatenated, channel-shuffled for inter-branch
-    information exchange, fused by 1x1x1 conv, and added to a residual.
+    Then branch outputs are concatenated, ECA reweights channels for soft
+    cross-channel interaction, fused by 1x1x1 conv, and added to a residual.
     """
 
     def __init__(
@@ -65,6 +65,11 @@ class GTSMambaBottleneck(nn.Module):
             expand=mamba_expand,
         )
 
+        self.channel_interaction = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
         self.fuse = nn.Sequential(
             nn.Conv3d(grouped_channels, channels, kernel_size=1, bias=False),
             nn.InstanceNorm3d(channels),
@@ -115,11 +120,10 @@ class GTSMambaBottleneck(nn.Module):
         out2 = self._branch_depth_scan(x2)
         out3 = self._branch_global(x3)
 
-        # Concatenate tri-axis outputs and shuffle channels so features from
-        # different scan axes can exchange information before pointwise fusion.
+        # Concatenate tri-axis outputs and apply ECA channel interaction
+        # before pointwise fusion.
         out = torch.cat([out1, out2, out3], dim=1)
-        if self.use_channel_shuffle:
-            out = channel_shuffle_3d(out, groups=3)
+        out = self.channel_interaction(out)
         out = self.fuse(out)
         return out + residual
 
