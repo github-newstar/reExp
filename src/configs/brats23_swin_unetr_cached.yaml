@@ -33,6 +33,7 @@ trainer:
     enabled: auto
     backend: nccl
     find_unused_parameters: false
+    distributed_eval: true
   lr_scheduler_step_per: epoch
   warmup:
     enabled: False

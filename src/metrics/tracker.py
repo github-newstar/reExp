@@ -1,4 +1,6 @@
 import pandas as pd
+import torch
+import torch.distributed as dist
 
 
 class MetricTracker:
@@ -75,3 +77,36 @@ class MetricTracker:
             metric_keys (Index): all metric names in the table.
         """
         return self._data.total.keys()
+
+    def sync_between_processes(self, device="cpu"):
+        """
+        Synchronize metric totals/counts across all distributed ranks.
+        """
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+
+        totals = torch.tensor(
+            self._data["total"].to_list(),
+            dtype=torch.float64,
+            device=device,
+        )
+        counts = torch.tensor(
+            self._data["counts"].to_list(),
+            dtype=torch.float64,
+            device=device,
+        )
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+
+        totals_cpu = totals.cpu().tolist()
+        counts_cpu = counts.cpu().tolist()
+        averages = []
+        for total, count in zip(totals_cpu, counts_cpu):
+            if count > 0.0:
+                averages.append(total / count)
+            else:
+                averages.append(0.0)
+
+        self._data.loc[:, "total"] = totals_cpu
+        self._data.loc[:, "counts"] = counts_cpu
+        self._data.loc[:, "average"] = averages

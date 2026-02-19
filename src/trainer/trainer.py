@@ -12,8 +12,9 @@ class Trainer(BaseTrainer):
 
     def _model_for_inference(self):
         """
-        Use plain module for eval to avoid DDP collectives when only rank0
-        runs validation.
+        Use plain module for eval to avoid DDP forward-time collectives.
+        This is important for sliding-window inference where different
+        samples can trigger different numbers of window forwards per rank.
         """
         if (not self.is_train) and hasattr(self.model, "module"):
             return self.model.module

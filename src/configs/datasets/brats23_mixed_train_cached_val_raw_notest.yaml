@@ -1,0 +1,27 @@
+train:
+  _target_: src.datasets.BraTS23CachedVectorDataset
+  cache_dir: "/cloud/cloud-ssd1/cached/brats23_fast_v2"
+  partition: "train"
+  usage_ratio: 0.3
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
+  fold: 0
+  n_folds: 5
+  seed: 42
+  instance_transforms: ${transforms.instance_transforms.train}
+
+val:
+  _target_: src.datasets.BraTS23Dataset
+  data_dir: "/root/reExp/data/BraTS2023"
+  partition: "val"
+  usage_ratio: 0.3
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
+  fold: 0
+  n_folds: 5
+  seed: 42
+  require_label: True
+  cache_in_memory: True
+  instance_transforms: ${transforms.instance_transforms.inference}

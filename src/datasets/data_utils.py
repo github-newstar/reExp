@@ -45,7 +45,14 @@ def move_batch_transforms_to_device(batch_transforms, device):
                 transforms[transform_name] = transforms[transform_name].to(device)
 
 
-def get_dataloaders(config, device, distributed=False, rank=0, world_size=1):
+def get_dataloaders(
+    config,
+    device,
+    distributed=False,
+    rank=0,
+    world_size=1,
+    distributed_eval=True,
+):
     """
     Create dataloaders for each of the dataset partitions.
     Also creates instance and batch transforms.
@@ -92,19 +99,31 @@ def get_dataloaders(config, device, distributed=False, rank=0, world_size=1):
         sampler = None
         shuffle = is_train_partition
 
-        if distributed and is_train_partition:
-            if len(dataset) < world_size:
-                raise ValueError(
-                    f"Train dataset too small for DDP: len(dataset)={len(dataset)} < world_size={world_size}"
+        if distributed:
+            if is_train_partition:
+                if len(dataset) < world_size:
+                    raise ValueError(
+                        f"Train dataset too small for DDP: len(dataset)={len(dataset)} < world_size={world_size}"
+                    )
+                sampler = DistributedSampler(
+                    dataset=dataset,
+                    num_replicas=world_size,
+                    rank=rank,
+                    shuffle=True,
+                    drop_last=True,
                 )
-            sampler = DistributedSampler(
-                dataset=dataset,
-                num_replicas=world_size,
-                rank=rank,
-                shuffle=True,
-                drop_last=True,
-            )
-            shuffle = False
+                shuffle = False
+            elif distributed_eval:
+                # Mature DDP practice: evaluate on all ranks and aggregate metrics.
+                # Keep drop_last=False to cover the full validation/test set.
+                sampler = DistributedSampler(
+                    dataset=dataset,
+                    num_replicas=world_size,
+                    rank=rank,
+                    shuffle=False,
+                    drop_last=False,
+                )
+                shuffle = False
 
         partition_dataloader = instantiate(
             dataloader_cfg,

@@ -1,10 +1,10 @@
 defaults:
-  - model: swin_unetr_brats23
+  - model: lgmamba_lightfsde
   - writer: wandb
   - metrics: brats23_seg
-  - datasets: brats23
+  - datasets: brats23_mixed_train_cached_val_raw_notest
   - dataloader: brats23
-  - transforms: brats23
+  - transforms: brats23_mixed_cached_train_raw_eval
   - _self_
 
 optimizer:
@@ -25,10 +25,17 @@ loss_function:
 
 writer:
   loss_names: ["loss", "loss_dice", "loss_focal", "loss_ds"]
+  run_name: "lg_sca_30_100_10"
+
+dataloader:
+  batch_size: 6
+  eval_batch_size: 1
+  num_workers: 6
 
 trainer:
   log_step: 10
   n_epochs: 100
+  eval_partitions: ["val"]
   ddp:
     enabled: auto
     backend: nccl
@@ -36,11 +43,11 @@ trainer:
     distributed_eval: true
   lr_scheduler_step_per: epoch
   warmup:
-    enabled: False
-    epochs: 5
+    enabled: true
+    epochs: 10
     start_factor: 0.1
     end_factor: 1.0
-  amp: False
+  amp: true
   amp_dtype: bf16
   et_threshold_search:
     enabled: False
@@ -58,7 +65,7 @@ trainer:
   device_tensors: ["image", "label"]
   resume_from: null
   device: auto
-  override: False
+  override: true
   monitor: "max val_MeanDice"
   save_period: 10
   early_stop: ${trainer.n_epochs}

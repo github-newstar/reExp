@@ -70,6 +70,12 @@ class BaseTrainer:
         self.world_size = int(world_size)
         self.is_distributed = bool(is_distributed)
         self.is_main_process = self.rank == 0
+        ddp_cfg = self.cfg_trainer.get("ddp", {})
+        # Align with mature frameworks: validation can run on all ranks and then
+        # aggregate metrics to rank0 for logging/checkpoint decisions.
+        self.distributed_eval = self.is_distributed and bool(
+            ddp_cfg.get("distributed_eval", True)
+        )
 
         self.logger = logger
         self.log_step = config.trainer.get("log_step", 50)
@@ -288,6 +294,33 @@ class BaseTrainer:
 
         return logs
 
+    def _sync_et_threshold_search_state(self, state):
+        """
+        Synchronize ET threshold-search accumulators across ranks.
+        """
+        if state is None:
+            return state
+        if not self.distributed_eval:
+            return state
+        if not (self.is_distributed and dist.is_available() and dist.is_initialized()):
+            return state
+
+        device = self.device if str(self.device).startswith("cuda") else "cpu"
+        intersection = torch.tensor(
+            state["intersection"], dtype=torch.float64, device=device
+        )
+        pred_sum = torch.tensor(state["pred_sum"], dtype=torch.float64, device=device)
+        target_sum = torch.tensor([state["target_sum"]], dtype=torch.float64, device=device)
+
+        dist.all_reduce(intersection, op=dist.ReduceOp.SUM)
+        dist.all_reduce(pred_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(target_sum, op=dist.ReduceOp.SUM)
+
+        state["intersection"] = intersection.cpu().tolist()
+        state["pred_sum"] = pred_sum.cpu().tolist()
+        state["target_sum"] = float(target_sum.item())
+        return state
+
     def train(self):
         """
         Wrapper around training process to save model on keyboard interrupt.
@@ -409,8 +442,14 @@ class BaseTrainer:
         if self.lr_scheduler is not None and self.lr_scheduler_step_per == "epoch":
             self.lr_scheduler.step()
 
-        # Run val/test on the main process in DDP mode.
-        if (not self.is_distributed) or self.is_main_process:
+        # Run validation:
+        # - non-distributed: regular single-process eval
+        # - distributed_eval=True: all ranks evaluate their shard
+        # - distributed_eval=False: only rank0 evaluates
+        run_eval_on_this_rank = (
+            (not self.is_distributed) or self.distributed_eval or self.is_main_process
+        )
+        if run_eval_on_this_rank:
             for part, dataloader in self.evaluation_dataloaders.items():
                 val_logs = self._evaluation_epoch(epoch, part, dataloader)
                 logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
@@ -431,7 +470,12 @@ class BaseTrainer:
         self.is_train = False
         self.model.eval()
         self.evaluation_metrics.reset()
+        eval_sampler = getattr(dataloader, "sampler", None)
+        if eval_sampler is not None and hasattr(eval_sampler, "set_epoch"):
+            eval_sampler.set_epoch(epoch)
         et_search_state = self._build_et_threshold_search_state(part=part)
+        last_batch_idx = None
+        last_batch = None
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader),
@@ -443,13 +487,19 @@ class BaseTrainer:
                     batch,
                     metrics=self.evaluation_metrics,
                 )
+                last_batch_idx = batch_idx
+                last_batch = batch
                 if et_search_state is not None:
                     self._update_et_threshold_search_state(et_search_state, batch)
+            if self.distributed_eval:
+                self.evaluation_metrics.sync_between_processes(device=self.device)
+                et_search_state = self._sync_et_threshold_search_state(et_search_state)
             self.writer.set_step(epoch * self.epoch_len, part)
             self._log_scalars(self.evaluation_metrics)
-            self._log_batch(
-                batch_idx, batch, part
-            )  # log only the last batch during inference
+            if last_batch_idx is not None and last_batch is not None:
+                self._log_batch(
+                    last_batch_idx, last_batch, part
+                )  # log only the last batch during inference
 
         logs = self.evaluation_metrics.result()
         if et_search_state is not None:
