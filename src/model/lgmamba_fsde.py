@@ -107,9 +107,11 @@ class LGMambaLightFSDENet(nn.Module):
         mamba_state: int = 16,
         mamba_conv: int = 4,
         mamba_expand: int = 2,
+        deep_supervision: bool = True,
     ):
         super().__init__()
         c1, c2, c3, c4 = feature_channels
+        self.deep_supervision = deep_supervision
 
         self.enc1 = DIDCBlock(in_channels, c1)
         self.down1 = nn.Conv3d(c1, c2, kernel_size=3, stride=2, padding=1, bias=False)
@@ -142,6 +144,10 @@ class LGMambaLightFSDENet(nn.Module):
         self.dec1 = DIDCBlock(c1 + c1, c1)
 
         self.head = nn.Conv3d(c1, out_channels, kernel_size=1)
+        if self.deep_supervision:
+            # Deep supervision heads on intermediate decoder stages.
+            self.ds_head2 = nn.Conv3d(c2, out_channels, kernel_size=1)
+            self.ds_head3 = nn.Conv3d(c3, out_channels, kernel_size=1)
 
     def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
         # Keep encoder stream unchanged; enhance only the skip features.
@@ -166,7 +172,23 @@ class LGMambaLightFSDENet(nn.Module):
         d1 = self.dec1(torch.cat([d1, e1], dim=1))
 
         logits = self.head(d1)
-        return {"logits": logits}
+        output = {"logits": logits}
+
+        # Emit auxiliary logits only in training mode to avoid extra
+        # compute/memory during validation and deployment inference.
+        if self.deep_supervision and self.training:
+            target_size = logits.shape[2:]
+            aux2 = self.ds_head2(d2)
+            aux3 = self.ds_head3(d3)
+            aux2 = F.interpolate(
+                aux2, size=target_size, mode="trilinear", align_corners=False
+            )
+            aux3 = F.interpolate(
+                aux3, size=target_size, mode="trilinear", align_corners=False
+            )
+            output["aux_logits"] = [aux2, aux3]
+
+        return output
 
 
 class LGMambaFSDENet(LGMambaLightFSDENet):

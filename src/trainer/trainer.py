@@ -1,3 +1,4 @@
+import torch
 from monai.inferers import sliding_window_inference
 
 from src.metrics.tracker import MetricTracker
@@ -63,15 +64,26 @@ class Trainer(BaseTrainer):
             metric_funcs = self.metrics["train"]
             self.optimizer.zero_grad()
 
-        batch["logits"] = self._predict_logits(batch)
-
-        all_losses = self.criterion(**batch)
-        batch.update(all_losses)
+        with torch.autocast(
+            device_type=self.autocast_device_type,
+            dtype=self.amp_dtype,
+            enabled=self.amp_enabled,
+        ):
+            batch["logits"] = self._predict_logits(batch)
+            all_losses = self.criterion(**batch)
+            batch.update(all_losses)
 
         if self.is_train:
-            batch["loss"].backward()  # sum of all losses is always called loss
-            self._clip_grad_norm()
-            self.optimizer.step()
+            if self.use_grad_scaler:
+                self.grad_scaler.scale(batch["loss"]).backward()
+                self.grad_scaler.unscale_(self.optimizer)
+                self._clip_grad_norm()
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+            else:
+                batch["loss"].backward()  # sum of all losses is always called loss
+                self._clip_grad_norm()
+                self.optimizer.step()
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
 
