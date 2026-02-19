@@ -66,8 +66,11 @@ class LightFSDEBlock(nn.Module):
         x_spatial = self.spatial_act(x_spatial)
 
         # 2) Frequency path:
-        # - rFFT to frequency domain (captures boundary/shape cues).
-        spectrum = torch.fft.rfftn(x, dim=(2, 3, 4))
+        # - BF16/FP16 FFT support is limited on some backends.
+        #   Force frequency ops in FP32 for stability/compatibility,
+        #   then cast back to the current training dtype.
+        x_fft_in = x.float()
+        spectrum = torch.fft.rfftn(x_fft_in, dim=(2, 3, 4))
         _, _, d, h, w_freq = spectrum.shape
 
         # - Low-rank spectrum learning:
@@ -87,6 +90,7 @@ class LightFSDEBlock(nn.Module):
 
         # - Back to spatial domain and generate gate map.
         freq_back = torch.fft.irfftn(modulated, s=x.shape[2:], dim=(2, 3, 4))
+        freq_back = freq_back.to(dtype=x.dtype)
         attention_map = self.gate_act(self.gate_conv(freq_back))
 
         # 3) Gated residual enhancement (frequency-guided spatial boosting).
