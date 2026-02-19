@@ -3,6 +3,9 @@ train:
   data_dir: "/path/to/BraTS23-GLI-TrainingData"
   partition: "train"
   usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
   fold: 0
   n_folds: 5
   seed: 42
@@ -14,6 +17,9 @@ val:
   data_dir: "/path/to/BraTS23-GLI-TrainingData"
   partition: "val"
   usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
   fold: 0
   n_folds: 5
   seed: 42
@@ -25,6 +31,9 @@ test:
   data_dir: "/path/to/BraTS23-GLI-TrainingData"
   partition: "test"
   usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
   fold: 0
   n_folds: 5
   seed: 42

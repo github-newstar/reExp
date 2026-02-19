@@ -100,6 +100,52 @@ def split_index_kfold(index, fold, n_folds):
     return train_index, val_index
 
 
+def split_index_three_way(index, val_ratio, test_ratio):
+    """
+    Split index into mutually exclusive train/val/test subsets.
+
+    The input index is expected to be pre-shuffled (we already do this in
+    `select_subset` with a fixed seed), so a simple contiguous split is
+    deterministic and reproducible.
+    """
+    if not (0 <= val_ratio < 1):
+        raise ValueError(f"val_ratio must be in [0, 1), got {val_ratio}")
+    if not (0 <= test_ratio < 1):
+        raise ValueError(f"test_ratio must be in [0, 1), got {test_ratio}")
+    if val_ratio + test_ratio >= 1:
+        raise ValueError(
+            f"val_ratio + test_ratio must be < 1, got {val_ratio + test_ratio}"
+        )
+
+    n_total = len(index)
+    if n_total < 3:
+        raise ValueError(
+            f"Need at least 3 samples for independent train/val/test split, got {n_total}"
+        )
+
+    n_test = int(n_total * test_ratio)
+    n_val = int(n_total * val_ratio)
+
+    if test_ratio > 0 and n_test == 0:
+        n_test = 1
+    if val_ratio > 0 and n_val == 0:
+        n_val = 1
+
+    # Keep at least one training sample.
+    while n_test + n_val >= n_total:
+        if n_test >= n_val and n_test > 0:
+            n_test -= 1
+        elif n_val > 0:
+            n_val -= 1
+        else:
+            break
+
+    test_index = index[:n_test]
+    val_index = index[n_test : n_test + n_val]
+    train_index = index[n_test + n_val :]
+    return train_index, val_index, test_index
+
+
 class BraTS23Dataset(Dataset):
     """
     BraTS23 dataset adapter following template expectations.
@@ -115,6 +161,9 @@ class BraTS23Dataset(Dataset):
         data_dir,
         partition,
         usage_ratio=1.0,
+        split_strategy="three_way",
+        val_ratio=0.1,
+        test_ratio=0.1,
         fold=0,
         n_folds=5,
         seed=42,
@@ -126,6 +175,9 @@ class BraTS23Dataset(Dataset):
             data_dir (str): BraTS23 root directory.
             partition (str): one of {"train", "val", "test", "all"}.
             usage_ratio (float): dataset usage ratio in (0, 1].
+            split_strategy (str): one of {"three_way", "kfold"}.
+            val_ratio (float): validation ratio for three-way split.
+            test_ratio (float): test ratio for three-way split.
             fold (int): validation fold id.
             n_folds (int): number of folds.
             seed (int): random seed for subset shuffle.
@@ -144,15 +196,33 @@ class BraTS23Dataset(Dataset):
         if partition == "all":
             self._index = selected_index
         else:
-            train_index, val_index = split_index_kfold(
-                index=selected_index,
-                fold=fold,
-                n_folds=n_folds,
-            )
-            if partition == "train":
-                self._index = train_index
+            if split_strategy == "three_way":
+                train_index, val_index, test_index = split_index_three_way(
+                    index=selected_index,
+                    val_ratio=val_ratio,
+                    test_ratio=test_ratio,
+                )
+                if partition == "train":
+                    self._index = train_index
+                elif partition == "val":
+                    self._index = val_index
+                else:
+                    self._index = test_index
+            elif split_strategy == "kfold":
+                train_index, val_index = split_index_kfold(
+                    index=selected_index,
+                    fold=fold,
+                    n_folds=n_folds,
+                )
+                if partition == "train":
+                    self._index = train_index
+                else:
+                    # Keep backward compatibility: val/test both use val fold.
+                    self._index = val_index
             else:
-                self._index = val_index
+                raise ValueError(
+                    f"split_strategy must be one of {{'three_way', 'kfold'}}, got {split_strategy}"
+                )
 
         self.instance_transforms = instance_transforms
 
@@ -195,6 +265,9 @@ class BraTS23CachedVectorDataset(Dataset):
         cache_dir,
         partition,
         usage_ratio=1.0,
+        split_strategy="three_way",
+        val_ratio=0.1,
+        test_ratio=0.1,
         fold=0,
         n_folds=5,
         seed=42,
@@ -211,12 +284,30 @@ class BraTS23CachedVectorDataset(Dataset):
         if partition == "all":
             self._index = selected_index
         else:
-            train_index, val_index = split_index_kfold(
-                index=selected_index,
-                fold=fold,
-                n_folds=n_folds,
-            )
-            self._index = train_index if partition == "train" else val_index
+            if split_strategy == "three_way":
+                train_index, val_index, test_index = split_index_three_way(
+                    index=selected_index,
+                    val_ratio=val_ratio,
+                    test_ratio=test_ratio,
+                )
+                if partition == "train":
+                    self._index = train_index
+                elif partition == "val":
+                    self._index = val_index
+                else:
+                    self._index = test_index
+            elif split_strategy == "kfold":
+                train_index, val_index = split_index_kfold(
+                    index=selected_index,
+                    fold=fold,
+                    n_folds=n_folds,
+                )
+                # Keep backward compatibility: val/test both use val fold.
+                self._index = train_index if partition == "train" else val_index
+            else:
+                raise ValueError(
+                    f"split_strategy must be one of {{'three_way', 'kfold'}}, got {split_strategy}"
+                )
 
         self.instance_transforms = instance_transforms
 

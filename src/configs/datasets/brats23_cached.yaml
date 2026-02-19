@@ -3,6 +3,9 @@ train:
   cache_dir: "data/cached/brats23"
   partition: "train"
   usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
   fold: 0
   n_folds: 5
   seed: 42
@@ -13,6 +16,9 @@ val:
   cache_dir: "data/cached/brats23"
   partition: "val"
   usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
   fold: 0
   n_folds: 5
   seed: 42
@@ -23,6 +29,9 @@ test:
   cache_dir: "data/cached/brats23"
   partition: "test"
   usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
   fold: 0
   n_folds: 5
   seed: 42
