@@ -125,6 +125,8 @@ def main(config):
     world_size = int(ddp_state["world_size"])
     is_main = rank == 0
     device = ddp_state["device"]
+    ddp_cfg = config.trainer.get("ddp", {})
+    distributed_eval = bool(ddp_cfg.get("distributed_eval", True))
 
     set_random_seed(config.trainer.seed)
 
@@ -148,6 +150,7 @@ def main(config):
             distributed=is_distributed,
             rank=rank,
             world_size=world_size,
+            distributed_eval=distributed_eval,
         )
 
         # build model architecture, then print to console
@@ -156,7 +159,6 @@ def main(config):
             logger.info(model)
 
         if is_distributed:
-            ddp_cfg = config.trainer.get("ddp", {})
             find_unused = bool(ddp_cfg.get("find_unused_parameters", False))
             if str(device).startswith("cuda"):
                 local_rank = int(ddp_state["local_rank"])
