@@ -71,6 +71,14 @@ class BaseTrainer:
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.batch_transforms = batch_transforms
+        self.lr_scheduler_step_per = str(
+            self.cfg_trainer.get("lr_scheduler_step_per", "batch")
+        ).lower()
+        if self.lr_scheduler_step_per not in {"batch", "epoch"}:
+            raise ValueError(
+                "trainer.lr_scheduler_step_per must be 'batch' or 'epoch', "
+                f"got {self.lr_scheduler_step_per!r}"
+            )
 
         # mixed precision setup (AMP)
         self.amp_enabled = bool(self.cfg_trainer.get("amp", False))
@@ -360,6 +368,9 @@ class BaseTrainer:
                 break
 
         logs = last_train_metrics
+
+        if self.lr_scheduler is not None and self.lr_scheduler_step_per == "epoch":
+            self.lr_scheduler.step()
 
         # Run val/test
         for part, dataloader in self.evaluation_dataloaders.items():

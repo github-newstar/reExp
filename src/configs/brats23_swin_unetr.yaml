@@ -29,6 +29,12 @@ writer:
 trainer:
   log_step: 10
   n_epochs: 100
+  lr_scheduler_step_per: epoch
+  warmup:
+    enabled: False
+    epochs: 5
+    start_factor: 0.1
+    end_factor: 1.0
   amp: False
   amp_dtype: bf16
   et_threshold_search:
