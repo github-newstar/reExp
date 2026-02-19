@@ -17,9 +17,14 @@ lr_scheduler:
   T_max: ${trainer.n_epochs}
 
 loss_function:
-  _target_: src.loss.DiceSegLoss
-  to_onehot_y: False
-  sigmoid: True
+  _target_: src.loss.DiceFocalSegLoss
+  dice_weight: 1.0
+  focal_weight: 1.0
+  gamma: 2.0
+  alpha: null
+
+writer:
+  loss_names: ["loss", "loss_dice", "loss_focal"]
 
 trainer:
   log_step: 10
