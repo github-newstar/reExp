@@ -1,0 +1,5 @@
+_target_: src.logger.NullWriter
+run_name: "noop"
+loss_names: ["loss", "loss_dice", "loss_focal", "loss_ds"]
+id_length: 8
+log_checkpoints: False

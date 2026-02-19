@@ -44,6 +44,8 @@ class DiceFocalSegLoss(nn.Module):
         focal_weight=1.0,
         gamma=2.0,
         alpha=None,
+        deep_supervision=True,
+        deep_supervision_weights=(0.5, 0.25),
         squared_pred=False,
         smooth_nr=1e-5,
         smooth_dr=1e-5,
@@ -53,6 +55,8 @@ class DiceFocalSegLoss(nn.Module):
         self.focal_weight = float(focal_weight)
         self.gamma = float(gamma)
         self.alpha = alpha
+        self.deep_supervision = bool(deep_supervision)
+        self.deep_supervision_weights = tuple(float(w) for w in deep_supervision_weights)
 
         self.dice_loss = DiceLoss(
             to_onehot_y=False,
@@ -85,12 +89,33 @@ class DiceFocalSegLoss(nn.Module):
 
         return loss.mean()
 
-    def forward(self, logits, label, **batch):
+    def _combined_loss(self, logits: torch.Tensor, label: torch.Tensor):
         dice = self.dice_loss(logits, label)
         focal = self._focal_with_logits(logits, label)
         total = self.dice_weight * dice + self.focal_weight * focal
+        return total, dice, focal
+
+    def forward(self, logits, label, aux_logits=None, **batch):
+        total, dice, focal = self._combined_loss(logits, label)
+
+        ds_loss = logits.new_tensor(0.0)
+        if self.deep_supervision and aux_logits is not None:
+            aux_list = [aux_logits] if torch.is_tensor(aux_logits) else list(aux_logits)
+            if len(aux_list) > 0:
+                for idx, aux in enumerate(aux_list):
+                    if idx < len(self.deep_supervision_weights):
+                        weight = self.deep_supervision_weights[idx]
+                    else:
+                        weight = self.deep_supervision_weights[-1] * (
+                            0.5 ** (idx - len(self.deep_supervision_weights) + 1)
+                        )
+                    aux_total, _, _ = self._combined_loss(aux, label)
+                    ds_loss = ds_loss + weight * aux_total
+                total = total + ds_loss
+
         return {
             "loss": total,
             "loss_dice": dice.detach(),
             "loss_focal": focal.detach(),
+            "loss_ds": ds_loss.detach(),
         }

@@ -72,6 +72,44 @@ class BaseTrainer:
         self.lr_scheduler = lr_scheduler
         self.batch_transforms = batch_transforms
 
+        # mixed precision setup (AMP)
+        self.amp_enabled = bool(self.cfg_trainer.get("amp", False))
+        self.amp_dtype_str = str(self.cfg_trainer.get("amp_dtype", "fp16")).lower()
+        if self.amp_dtype_str in ("fp16", "float16"):
+            self.amp_dtype = torch.float16
+        elif self.amp_dtype_str in ("bf16", "bfloat16"):
+            self.amp_dtype = torch.bfloat16
+        else:
+            raise ValueError(
+                f"Unsupported trainer.amp_dtype={self.amp_dtype_str}. "
+                "Use 'fp16' or 'bf16'."
+            )
+
+        device_str = str(self.device)
+        if device_str.startswith("cuda"):
+            self.autocast_device_type = "cuda"
+        elif device_str.startswith("mps"):
+            self.autocast_device_type = "mps"
+        else:
+            self.autocast_device_type = "cpu"
+
+        if (
+            self.amp_enabled
+            and self.autocast_device_type == "cpu"
+            and self.amp_dtype != torch.bfloat16
+        ):
+            self.logger.warning(
+                "CPU autocast only supports bf16 reliably. "
+                "Disabling AMP because amp_dtype is not bf16."
+            )
+            self.amp_enabled = False
+        self.use_grad_scaler = (
+            self.amp_enabled
+            and self.autocast_device_type == "cuda"
+            and self.amp_dtype == torch.float16
+        )
+        self.grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_grad_scaler)
+
         # define dataloaders
         self.train_dataloader = dataloaders["train"]
         if epoch_len is None:
