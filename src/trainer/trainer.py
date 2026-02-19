@@ -10,19 +10,29 @@ class Trainer(BaseTrainer):
     Trainer class. Defines the logic of batch logging and processing.
     """
 
-    def _predict_logits(self, batch):
+    def _forward_model(self, batch):
         """
-        Predict logits for a batch.
+        Forward model and return output dict.
 
-        Training uses direct full-volume forward.
-        Validation/testing can optionally use MONAI sliding-window inference.
+        Training:
+        - uses direct full-volume forward
+        - keeps auxiliary outputs (e.g., deep supervision logits)
+
+        Validation/testing:
+        - optionally uses MONAI sliding-window inference
+        - returns logits only
         """
         image = batch["image"]
         use_sw = (not self.is_train) and self.cfg_trainer.get(
             "use_sliding_window_inference", False
         )
         if not use_sw:
-            return self.model(**batch)["logits"]
+            outputs = self.model(**batch)
+            if not isinstance(outputs, dict) or "logits" not in outputs:
+                raise ValueError(
+                    "Model forward must return a dict containing key 'logits'."
+                )
+            return outputs
 
         roi_size = tuple(self.cfg_trainer.get("sw_roi_size", [96, 96, 96]))
         sw_batch_size = int(self.cfg_trainer.get("sw_batch_size", 1))
@@ -35,7 +45,7 @@ class Trainer(BaseTrainer):
             predictor=lambda x: self.model(image=x)["logits"],
             overlap=overlap,
         )
-        return logits
+        return {"logits": logits}
 
     def process_batch(self, batch, metrics: MetricTracker):
         """
@@ -69,7 +79,8 @@ class Trainer(BaseTrainer):
             dtype=self.amp_dtype,
             enabled=self.amp_enabled,
         ):
-            batch["logits"] = self._predict_logits(batch)
+            model_outputs = self._forward_model(batch)
+            batch.update(model_outputs)
             all_losses = self.criterion(**batch)
             batch.update(all_losses)
 
