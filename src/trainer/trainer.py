@@ -10,6 +10,15 @@ class Trainer(BaseTrainer):
     Trainer class. Defines the logic of batch logging and processing.
     """
 
+    def _model_for_inference(self):
+        """
+        Use plain module for eval to avoid DDP collectives when only rank0
+        runs validation.
+        """
+        if (not self.is_train) and hasattr(self.model, "module"):
+            return self.model.module
+        return self.model
+
     def _forward_model(self, batch):
         """
         Forward model and return output dict.
@@ -23,11 +32,12 @@ class Trainer(BaseTrainer):
         - returns logits only
         """
         image = batch["image"]
+        model = self._model_for_inference()
         use_sw = (not self.is_train) and self.cfg_trainer.get(
             "use_sliding_window_inference", False
         )
         if not use_sw:
-            outputs = self.model(**batch)
+            outputs = model(**batch)
             if not isinstance(outputs, dict) or "logits" not in outputs:
                 raise ValueError(
                     "Model forward must return a dict containing key 'logits'."
@@ -42,7 +52,7 @@ class Trainer(BaseTrainer):
             inputs=image,
             roi_size=roi_size,
             sw_batch_size=sw_batch_size,
-            predictor=lambda x: self.model(image=x)["logits"],
+            predictor=lambda x: model(image=x)["logits"],
             overlap=overlap,
         )
         return {"logits": logits}
