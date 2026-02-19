@@ -16,6 +16,7 @@ dependencies = [
     "comet_ml",
     "hydra-core",
     "monai>=1.5.2",
+    "scipy",
     "nibabel",
     "einops",
 ]
