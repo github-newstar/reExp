@@ -2,6 +2,7 @@ import random
 from collections import OrderedDict
 from copy import deepcopy
 import json
+import multiprocessing as mp
 from pathlib import Path
 
 import torch
@@ -337,13 +338,24 @@ class BraTS23CachedVectorDataset(Dataset):
         self.cache_in_memory = bool(cache_in_memory)
         self._memory_cache = None
         if self.cache_in_memory:
-            self._memory_cache = [
-                self._load_and_transform(i)
-                for i in tqdm(
-                    range(len(self._index)),
-                    desc=f"Caching {partition} cached vectors in memory",
+            # Determine appropriate number of workers
+            # Leave at least 1 core free, cap at a reasonable number to avoid memory spikes
+            num_workers = max(1, min(mp.cpu_count() - 1, 12))
+            
+            self._temp_for_mp = self._index
+            
+            with mp.Pool(processes=num_workers) as pool:
+                results = list(
+                    tqdm(
+                        pool.imap(self._load_and_transform_for_mp, range(len(self._index))),
+                        total=len(self._index),
+                        desc=f"Caching {partition} cached vectors in memory (MP, workers={num_workers})",
+                    )
                 )
-            ]
+            self._memory_cache = results
+            
+    def _load_and_transform_for_mp(self, ind):
+        return self._load_and_transform(ind)
 
     def __len__(self):
         return len(self._memory_cache) if self._memory_cache is not None else len(self._index)
