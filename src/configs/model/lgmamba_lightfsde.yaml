@@ -6,3 +6,5 @@ mamba_state: 16
 mamba_conv: 4
 mamba_expand: 2
 deep_supervision: true
+dynamic_eval:
+  enabled: true
