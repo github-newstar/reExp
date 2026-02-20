@@ -52,6 +52,7 @@ class RandETFocusedCropd(MapTransform):
         et_channel=2,
         wt_channel=1,
         et_focus_prob=0.7,
+        random_prob=0.33,
     ):
         super().__init__(keys)
         self.roi_size = tuple(int(x) for x in roi_size)
@@ -59,6 +60,7 @@ class RandETFocusedCropd(MapTransform):
         self.et_channel = int(et_channel)
         self.wt_channel = int(wt_channel)
         self.et_focus_prob = float(et_focus_prob)
+        self.random_prob = float(random_prob)
 
     def _sample_center(self, label_tensor: torch.Tensor):
         # label_tensor: [C, D, H, W]
@@ -80,15 +82,17 @@ class RandETFocusedCropd(MapTransform):
             wt_mask = label_tensor[self.wt_channel] > 0
 
         center = None
-        if torch.rand(1).item() < self.et_focus_prob:
-            et_coords = torch.nonzero(et_mask, as_tuple=False)
-            if et_coords.numel() > 0:
-                center = et_coords[torch.randint(et_coords.shape[0], (1,)).item()]
+        
+        if torch.rand(1).item() > self.random_prob:
+            if torch.rand(1).item() < self.et_focus_prob:
+                et_coords = torch.nonzero(et_mask, as_tuple=False)
+                if et_coords.numel() > 0:
+                    center = et_coords[torch.randint(et_coords.shape[0], (1,)).item()]
 
-        if center is None:
-            wt_coords = torch.nonzero(wt_mask, as_tuple=False)
-            if wt_coords.numel() > 0:
-                center = wt_coords[torch.randint(wt_coords.shape[0], (1,)).item()]
+            if center is None:
+                wt_coords = torch.nonzero(wt_mask, as_tuple=False)
+                if wt_coords.numel() > 0:
+                    center = wt_coords[torch.randint(wt_coords.shape[0], (1,)).item()]
 
         if center is None:
             center = torch.tensor(

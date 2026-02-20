@@ -31,7 +31,7 @@ class ShallowDWConvResidualBlock(nn.Module):
             groups=out_channels,
             bias=False,
         )
-        self.bn = nn.BatchNorm3d(out_channels)
+        self.bn = nn.InstanceNorm3d(out_channels)
         self.act = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -69,7 +69,7 @@ class LightFSDEBlock(nn.Module):
             groups=channels,
             bias=False,
         )
-        self.bn = nn.BatchNorm3d(channels)
+        self.bn = nn.InstanceNorm3d(channels)
         self.spatial_act = nn.SiLU(inplace=True)
 
         # Frequency branch:

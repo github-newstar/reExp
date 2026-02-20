@@ -1,0 +1,5 @@
+_target_: src.model.NoNewNet
+in_channels: 4
+out_channels: 3
+base_features: 30
+negative_slope: 0.01
