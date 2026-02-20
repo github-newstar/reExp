@@ -63,8 +63,21 @@ class RandETFocusedCropd(MapTransform):
     def _sample_center(self, label_tensor: torch.Tensor):
         # label_tensor: [C, D, H, W]
         spatial_shape = tuple(int(x) for x in label_tensor.shape[-3:])
-        et_mask = label_tensor[self.et_channel] > 0
-        wt_mask = label_tensor[self.wt_channel] > 0
+        # Support both:
+        # 1) multi-channel BraTS labels [TC, WT, ET]
+        # 2) scalar single-channel BraTS labels [1, D, H, W] in {0,1,2,3}
+        if label_tensor.shape[0] == 1:
+            scalar = label_tensor[0]
+            et_mask = scalar == 3
+            wt_mask = scalar > 0
+        else:
+            if self.et_channel >= label_tensor.shape[0] or self.wt_channel >= label_tensor.shape[0]:
+                raise ValueError(
+                    f"Label channels={label_tensor.shape[0]} are insufficient for "
+                    f"et_channel={self.et_channel}, wt_channel={self.wt_channel}"
+                )
+            et_mask = label_tensor[self.et_channel] > 0
+            wt_mask = label_tensor[self.wt_channel] > 0
 
         center = None
         if torch.rand(1).item() < self.et_focus_prob:
