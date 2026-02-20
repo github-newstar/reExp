@@ -529,37 +529,41 @@ class BaseTrainer:
         """
         best = False
         stop_process = False
-        if self.mnt_mode != "off":
-            try:
-                # check whether model performance improved or not,
-                # according to specified metric(mnt_metric)
-                if self.mnt_mode == "min":
-                    improved = logs[self.mnt_metric] <= self.mnt_best
-                elif self.mnt_mode == "max":
-                    improved = logs[self.mnt_metric] >= self.mnt_best
-                else:
-                    improved = False
-            except KeyError:
-                self.logger.warning(
-                    f"Warning: Metric '{self.mnt_metric}' is not found. "
-                    "Model performance monitoring is disabled."
-                )
-                self.mnt_mode = "off"
-                improved = False
+        if self.mnt_mode == "off":
+            return best, stop_process, not_improved_count
 
-            if improved:
-                self.mnt_best = logs[self.mnt_metric]
-                not_improved_count = 0
-                best = True
+        try:
+            # check whether model performance improved or not,
+            # according to specified metric(mnt_metric)
+            if self.mnt_mode == "min":
+                improved = logs[self.mnt_metric] <= self.mnt_best
+            elif self.mnt_mode == "max":
+                improved = logs[self.mnt_metric] >= self.mnt_best
             else:
-                not_improved_count += 1
+                improved = False
+        except KeyError:
+            self.logger.warning(
+                f"Warning: Metric '{self.mnt_metric}' is not found. "
+                "Model performance monitoring is disabled for current run."
+            )
+            # When no evaluation is configured (e.g. eval_partitions=[]),
+            # disable monitor gracefully and continue training.
+            self.mnt_mode = "off"
+            return best, stop_process, not_improved_count
 
-            if not_improved_count >= self.early_stop:
-                self.logger.info(
-                    "Validation performance didn't improve for {} epochs. "
-                    "Training stops.".format(self.early_stop)
-                )
-                stop_process = True
+        if improved:
+            self.mnt_best = logs[self.mnt_metric]
+            not_improved_count = 0
+            best = True
+        else:
+            not_improved_count += 1
+
+        if not_improved_count >= self.early_stop:
+            self.logger.info(
+                "Validation performance didn't improve for {} epochs. "
+                "Training stops.".format(self.early_stop)
+            )
+            stop_process = True
         return best, stop_process, not_improved_count
 
     def move_batch_to_device(self, batch):
