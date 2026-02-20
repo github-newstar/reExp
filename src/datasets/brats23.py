@@ -294,6 +294,7 @@ class BraTS23CachedVectorDataset(Dataset):
         seed=42,
         instance_transforms=None,
         use_mmap=True,
+        cache_in_memory=False,
     ):
         if partition not in {"train", "val", "test", "all"}:
             raise ValueError(
@@ -333,9 +334,19 @@ class BraTS23CachedVectorDataset(Dataset):
 
         self.instance_transforms = instance_transforms
         self.use_mmap = bool(use_mmap)
+        self.cache_in_memory = bool(cache_in_memory)
+        self._memory_cache = None
+        if self.cache_in_memory:
+            self._memory_cache = [
+                self._load_and_transform(i)
+                for i in tqdm(
+                    range(len(self._index)),
+                    desc=f"Caching {partition} cached vectors in memory",
+                )
+            ]
 
     def __len__(self):
-        return len(self._index)
+        return len(self._memory_cache) if self._memory_cache is not None else len(self._index)
 
     def _load_payload(self, vector_path):
         """
@@ -390,6 +401,11 @@ class BraTS23CachedVectorDataset(Dataset):
         return torch.stack([tc, wt, et], dim=0).float()
 
     def __getitem__(self, ind):
+        if self._memory_cache is not None:
+            return deepcopy(self._memory_cache[ind])
+        return self._load_and_transform(ind)
+
+    def _load_and_transform(self, ind):
         record = self._index[ind]
         vector_path = Path(record["vector_path"]).expanduser().resolve()
         sample = self._load_payload(vector_path)
