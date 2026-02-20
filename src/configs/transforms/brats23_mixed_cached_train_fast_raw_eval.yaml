@@ -1,0 +1,4 @@
+defaults:
+  - batch_transforms: brats23
+  - instance_transforms: brats23_mixed_cached_train_fast_raw_eval
+  - _self_

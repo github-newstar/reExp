@@ -293,6 +293,7 @@ class BraTS23CachedVectorDataset(Dataset):
         n_folds=5,
         seed=42,
         instance_transforms=None,
+        use_mmap=True,
     ):
         if partition not in {"train", "val", "test", "all"}:
             raise ValueError(
@@ -331,22 +332,40 @@ class BraTS23CachedVectorDataset(Dataset):
                 )
 
         self.instance_transforms = instance_transforms
+        self.use_mmap = bool(use_mmap)
 
     def __len__(self):
         return len(self._index)
 
-    @staticmethod
-    def _load_payload(vector_path):
+    def _load_payload(self, vector_path):
         """
         Load cached payload with backward compatibility for torch versions.
         """
         try:
+            if self.use_mmap:
+                return torch.load(
+                    vector_path,
+                    map_location="cpu",
+                    mmap=True,
+                    weights_only=False,
+                )
             return torch.load(
                 vector_path,
                 map_location="cpu",
-                mmap=True,
                 weights_only=False,
             )
+        except RuntimeError as error:
+            # Fallback for old/non-zip torch.save payloads or mmap-incompatible files.
+            if self.use_mmap and "mmap" in str(error).lower():
+                try:
+                    return torch.load(
+                        vector_path,
+                        map_location="cpu",
+                        weights_only=False,
+                    )
+                except TypeError:
+                    return torch.load(vector_path, map_location="cpu")
+            raise
         except TypeError:
             try:
                 return torch.load(vector_path, map_location="cpu", weights_only=False)
