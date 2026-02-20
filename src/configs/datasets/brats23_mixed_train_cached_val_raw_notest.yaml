@@ -1,6 +1,7 @@
 train:
   _target_: src.datasets.BraTS23CachedVectorDataset
   cache_dir: "/cloud/cloud-ssd1/cached/brats23_fast_v2"
+  use_mmap: False
   partition: "train"
   usage_ratio: 0.3
   split_strategy: "three_way"

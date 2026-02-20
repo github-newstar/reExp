@@ -1,6 +1,7 @@
 train:
   _target_: src.datasets.BraTS23CachedVectorDataset
   cache_dir: "data/cached/brats23"
+  use_mmap: False
   partition: "train"
   usage_ratio: 1.0
   split_strategy: "three_way"
@@ -14,6 +15,7 @@ train:
 val:
   _target_: src.datasets.BraTS23CachedVectorDataset
   cache_dir: "data/cached/brats23"
+  use_mmap: False
   partition: "val"
   usage_ratio: 1.0
   split_strategy: "three_way"
@@ -27,6 +29,7 @@ val:
 test:
   _target_: src.datasets.BraTS23CachedVectorDataset
   cache_dir: "data/cached/brats23"
+  use_mmap: False
   partition: "test"
   usage_ratio: 1.0
   split_strategy: "three_way"
