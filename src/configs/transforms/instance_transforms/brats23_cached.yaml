@@ -34,9 +34,5 @@ train:
 inference:
   _target_: monai.transforms.Compose
   transforms:
-    - _target_: monai.transforms.NormalizeIntensityd
-      keys: ["image"]
-      nonzero: True
-      channel_wise: True
     - _target_: monai.transforms.EnsureTyped
       keys: ["image", "label"]
