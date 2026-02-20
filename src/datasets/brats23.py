@@ -375,12 +375,16 @@ class BraTS23CachedVectorDataset(Dataset):
         vector_path = Path(record["vector_path"]).expanduser().resolve()
         sample = self._load_payload(vector_path)
 
-        image = torch.as_tensor(sample["image"]).float()
+        # Keep cached dtype/shape before instance transforms so heavy transforms
+        # (foreground crop, ET-focused crop) run on cheaper tensors first.
+        image = torch.as_tensor(sample["image"])
         label = torch.as_tensor(sample["label"])
-        if label.ndim == 3 or (label.ndim == 4 and label.shape[0] == 1):
-            label = self._to_three_channel_label(label)
-        elif label.ndim == 4 and label.shape[0] == 3:
-            label = label.float()
+
+        # Accept scalar label [D,H,W] or [1,D,H,W] before transforms.
+        if label.ndim == 3:
+            label = label.unsqueeze(0)
+        elif label.ndim == 4 and label.shape[0] in {1, 3}:
+            pass
         else:
             raise ValueError(
                 f"Unsupported cached label shape {tuple(label.shape)} in {vector_path}"
@@ -391,4 +395,19 @@ class BraTS23CachedVectorDataset(Dataset):
         sample.setdefault("case_id", record.get("case_id", vector_path.stem))
         if self.instance_transforms is not None:
             sample = self.instance_transforms(sample)
+
+        # Normalize final output contract:
+        # - image as float tensor
+        # - label as 3-channel [TC, WT, ET]
+        sample["image"] = torch.as_tensor(sample["image"]).float()
+        final_label = torch.as_tensor(sample["label"])
+        if final_label.ndim == 3 or (final_label.ndim == 4 and final_label.shape[0] == 1):
+            final_label = self._to_three_channel_label(final_label)
+        elif final_label.ndim == 4 and final_label.shape[0] == 3:
+            final_label = final_label.float()
+        else:
+            raise ValueError(
+                f"Unsupported transformed label shape {tuple(final_label.shape)} in {vector_path}"
+            )
+        sample["label"] = final_label
         return sample
