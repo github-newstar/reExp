@@ -93,6 +93,17 @@ class BaseTrainer:
                 "trainer.lr_scheduler_step_per must be 'batch' or 'epoch', "
                 f"got {self.lr_scheduler_step_per!r}"
             )
+        self.eval_interval = int(self.cfg_trainer.get("eval_interval", 1))
+        if self.eval_interval < 1:
+            raise ValueError(
+                "trainer.eval_interval must be >= 1, "
+                f"got {self.eval_interval!r}"
+            )
+
+        self.dynamic_eval_cfg = self.cfg_trainer.get("dynamic_eval", {})
+        if not self.dynamic_eval_cfg:
+            self.dynamic_eval_cfg = self.config.get("model", {}).get("dynamic_eval", {})
+        self.dynamic_eval_enabled = bool(self.dynamic_eval_cfg.get("enabled", False))
 
         # mixed precision setup (AMP)
         self.amp_enabled = bool(self.cfg_trainer.get("amp", False))
@@ -349,16 +360,28 @@ class BaseTrainer:
             logs = {"epoch": epoch}
             logs.update(result)
 
+            metric_available = self.mnt_mode == "off" or self.mnt_metric in logs
             if self.is_main_process:
                 # print logged information to the screen
                 for key, value in logs.items():
                     self.logger.info(f"    {key:15s}: {value}")
 
-                # evaluate model performance according to configured metric,
-                # save best checkpoint as model_best
-                best, stop_process, not_improved_count = self._monitor_performance(
-                    logs, not_improved_count
-                )
+                if metric_available:
+                    # evaluate model performance according to configured metric,
+                    # save best checkpoint as model_best
+                    best, stop_process, not_improved_count = self._monitor_performance(
+                        logs, not_improved_count
+                    )
+                else:
+                    # Skip monitoring on epochs without evaluation to keep
+                    # early-stop logic valid when eval runs every N epochs.
+                    best = False
+                    stop_process = False
+                    if self.mnt_mode != "off":
+                        self.logger.info(
+                            "Skipping monitor this epoch because "
+                            f"'{self.mnt_metric}' is unavailable."
+                        )
             else:
                 best = False
                 stop_process = False
@@ -449,10 +472,32 @@ class BaseTrainer:
         run_eval_on_this_rank = (
             (not self.is_distributed) or self.distributed_eval or self.is_main_process
         )
-        if run_eval_on_this_rank:
+        is_eval_epoch = False
+        current_interval = self.eval_interval
+        if epoch == 1:
+            is_eval_epoch = True
+        elif self.dynamic_eval_enabled:
+            progress = epoch / self.epochs
+            if progress <= 0.5:
+                current_interval = 5
+            elif progress <= 0.8:
+                current_interval = 2
+            else:
+                current_interval = 1
+            is_eval_epoch = (epoch % current_interval == 0)
+        else:
+            is_eval_epoch = (epoch % self.eval_interval == 0)
+
+        run_eval_this_epoch = len(self.evaluation_dataloaders) > 0 and is_eval_epoch
+
+        if run_eval_on_this_rank and run_eval_this_epoch:
             for part, dataloader in self.evaluation_dataloaders.items():
                 val_logs = self._evaluation_epoch(epoch, part, dataloader)
                 logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
+        elif run_eval_on_this_rank and len(self.evaluation_dataloaders) > 0:
+            self.logger.info(
+                f"Skip evaluation at epoch {epoch}: (dynamic_eval={self.dynamic_eval_enabled}, current_interval={current_interval})."
+            )
 
         return logs
 
