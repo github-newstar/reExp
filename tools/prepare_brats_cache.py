@@ -21,6 +21,7 @@ Optimized vector schema (smaller disk footprint for HDD):
 import argparse
 import json
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import nibabel as nib
 import numpy as np
@@ -212,6 +213,7 @@ def prepare_cache(
     n4_correct: bool,
     n4_shrink_factor: int,
     n4_iterations: tuple[int, ...],
+    num_workers: int,
 ) -> None:
     data_dir = data_dir.expanduser().resolve()
     cache_dir = cache_dir.expanduser().resolve()
@@ -228,78 +230,55 @@ def prepare_cache(
         nii_root.mkdir(parents=True, exist_ok=True)
 
     index = []
-    for case_dir in tqdm(case_dirs, desc="Preparing cache"):
-        built = build_case_paths(case_dir)
-        if built is None:
-            continue
-        case_id, image_paths, label_path = built
-
-        vector_path = cases_root / f"{case_id}.pt"
-        if vector_path.exists() and not overwrite_vectors:
-            index.append({"case_id": case_id, "vector_path": str(vector_path)})
-            continue
-
-        if write_uncompressed_nii:
-            for mod, src_path in zip(BRATS_MODALITIES, image_paths):
-                maybe_write_uncompressed_nifti(
-                    src_nii_gz=src_path,
-                    dst_nii=nii_root / case_id / f"{case_id}-{mod}.nii",
-                )
-            maybe_write_uncompressed_nifti(
-                src_nii_gz=label_path,
-                dst_nii=nii_root / case_id / f"{case_id}-seg.nii",
-            )
-
-        image_arrays = [
-            load_nifti_array_with_optional_n4(
-                nii_path=path,
-                enable_n4=n4_correct,
+    if num_workers <= 1:
+        for case_dir in tqdm(case_dirs, desc="Preparing cache"):
+            item = _prepare_case_worker(
+                case_dir=case_dir,
+                cases_root=cases_root,
+                nii_root=nii_root,
+                write_uncompressed_nii=write_uncompressed_nii,
+                overwrite_vectors=overwrite_vectors,
+                crop_foreground=crop_foreground,
+                crop_margin=crop_margin,
+                min_size=min_size,
+                k_divisible=k_divisible,
+                image_dtype=image_dtype,
+                n4_correct=n4_correct,
                 n4_shrink_factor=n4_shrink_factor,
                 n4_iterations=n4_iterations,
             )
-            for path in image_paths
-        ]
-        image = np.stack(image_arrays, axis=0)  # [4, D, H, W]
-        image = normalize_nonzero_channelwise(image=image)
-
-        label = nib.load(str(label_path)).get_fdata(dtype=np.float32).astype(np.uint8)
-        label[label == 4] = 3  # BraTS2021 compatibility
-
-        orig_shape = tuple(int(x) for x in image.shape[1:])
-        bbox_start = (0, 0, 0)
-        bbox_end = orig_shape
-        if crop_foreground:
-            image, label, bbox_start, bbox_end = crop_to_foreground(
-                image=image,
-                label=label,
-                margin=crop_margin,
-                min_size=min_size,
-                k_divisible=k_divisible,
-            )
-
-        if image_dtype == "float16":
-            image = image.astype(np.float16, copy=False)
-        else:
-            image = image.astype(np.float32, copy=False)
-        label = label[np.newaxis, ...].astype(np.uint8, copy=False)  # [1, D, H, W]
-
-        payload = {
-            "image": torch.from_numpy(image),
-            "label": torch.from_numpy(label),
-            "case_id": case_id,
-            "meta": {
-                "orig_shape": list(orig_shape),
-                "cropped_shape": [int(x) for x in image.shape[1:]],
-                "bbox_start": [int(x) for x in bbox_start],
-                "bbox_end": [int(x) for x in bbox_end],
-                "n4_corrected": bool(n4_correct),
-                "n4_shrink_factor": int(n4_shrink_factor),
-                "n4_iterations": [int(x) for x in n4_iterations],
-            },
+            if item is not None:
+                index.append(item)
+    else:
+        worker_kwargs = {
+            "cases_root": cases_root,
+            "nii_root": nii_root,
+            "write_uncompressed_nii": write_uncompressed_nii,
+            "overwrite_vectors": overwrite_vectors,
+            "crop_foreground": crop_foreground,
+            "crop_margin": crop_margin,
+            "min_size": min_size,
+            "k_divisible": k_divisible,
+            "image_dtype": image_dtype,
+            "n4_correct": n4_correct,
+            "n4_shrink_factor": n4_shrink_factor,
+            "n4_iterations": n4_iterations,
         }
-        torch.save(payload, vector_path)
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(_prepare_case_worker, case_dir=case_dir, **worker_kwargs): case_dir
+                for case_dir in case_dirs
+            }
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Preparing cache"):
+                case_dir = futures[future]
+                try:
+                    item = future.result()
+                except Exception as error:
+                    raise RuntimeError(f"Failed to prepare case: {case_dir}") from error
+                if item is not None:
+                    index.append(item)
 
-        index.append({"case_id": case_id, "vector_path": str(vector_path)})
+    index.sort(key=lambda x: x["case_id"])
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     with index_path.open("w", encoding="utf-8") as f:
@@ -310,6 +289,92 @@ def prepare_cache(
     print(f"Vectors dir: {cases_root}")
     if write_uncompressed_nii:
         print(f"Uncompressed NIfTI dir: {nii_root}")
+
+
+def _prepare_case_worker(
+    case_dir: Path,
+    cases_root: Path,
+    nii_root: Path,
+    write_uncompressed_nii: bool,
+    overwrite_vectors: bool,
+    crop_foreground: bool,
+    crop_margin: int,
+    min_size: tuple[int, int, int],
+    k_divisible: int,
+    image_dtype: str,
+    n4_correct: bool,
+    n4_shrink_factor: int,
+    n4_iterations: tuple[int, ...],
+):
+    built = build_case_paths(case_dir)
+    if built is None:
+        return None
+    case_id, image_paths, label_path = built
+
+    vector_path = cases_root / f"{case_id}.pt"
+    if vector_path.exists() and not overwrite_vectors:
+        return {"case_id": case_id, "vector_path": str(vector_path)}
+
+    if write_uncompressed_nii:
+        for mod, src_path in zip(BRATS_MODALITIES, image_paths):
+            maybe_write_uncompressed_nifti(
+                src_nii_gz=src_path,
+                dst_nii=nii_root / case_id / f"{case_id}-{mod}.nii",
+            )
+        maybe_write_uncompressed_nifti(
+            src_nii_gz=label_path,
+            dst_nii=nii_root / case_id / f"{case_id}-seg.nii",
+        )
+
+    image_arrays = [
+        load_nifti_array_with_optional_n4(
+            nii_path=path,
+            enable_n4=n4_correct,
+            n4_shrink_factor=n4_shrink_factor,
+            n4_iterations=n4_iterations,
+        )
+        for path in image_paths
+    ]
+    image = np.stack(image_arrays, axis=0)  # [4, D, H, W]
+    image = normalize_nonzero_channelwise(image=image)
+
+    label = nib.load(str(label_path)).get_fdata(dtype=np.float32).astype(np.uint8)
+    label[label == 4] = 3  # BraTS2021 compatibility
+
+    orig_shape = tuple(int(x) for x in image.shape[1:])
+    bbox_start = (0, 0, 0)
+    bbox_end = orig_shape
+    if crop_foreground:
+        image, label, bbox_start, bbox_end = crop_to_foreground(
+            image=image,
+            label=label,
+            margin=crop_margin,
+            min_size=min_size,
+            k_divisible=k_divisible,
+        )
+
+    if image_dtype == "float16":
+        image = image.astype(np.float16, copy=False)
+    else:
+        image = image.astype(np.float32, copy=False)
+    label = label[np.newaxis, ...].astype(np.uint8, copy=False)  # [1, D, H, W]
+
+    payload = {
+        "image": torch.from_numpy(image),
+        "label": torch.from_numpy(label),
+        "case_id": case_id,
+        "meta": {
+            "orig_shape": list(orig_shape),
+            "cropped_shape": [int(x) for x in image.shape[1:]],
+            "bbox_start": [int(x) for x in bbox_start],
+            "bbox_end": [int(x) for x in bbox_end],
+            "n4_corrected": bool(n4_correct),
+            "n4_shrink_factor": int(n4_shrink_factor),
+            "n4_iterations": [int(x) for x in n4_iterations],
+        },
+    }
+    torch.save(payload, vector_path)
+    return {"case_id": case_id, "vector_path": str(vector_path)}
 
 
 def parse_args():
@@ -385,6 +450,12 @@ def parse_args():
         default=[50, 50, 30, 20],
         help="N4 max iterations per level, e.g. 50 50 30 20.",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of parallel worker processes for cache preparation.",
+    )
     return parser.parse_args()
 
 
@@ -403,6 +474,7 @@ def main():
         n4_correct=args.n4_correct,
         n4_shrink_factor=args.n4_shrink_factor,
         n4_iterations=tuple(args.n4_iterations),
+        num_workers=int(args.num_workers),
     )
 
 
