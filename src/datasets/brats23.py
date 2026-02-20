@@ -357,15 +357,15 @@ class BraTS23CachedVectorDataset(Dataset):
             with mp.Pool(processes=num_workers) as pool:
                 results = list(
                     tqdm(
-                        pool.imap(self._load_and_transform_for_mp, range(len(self._index))),
+                        pool.imap(self._load_raw_for_mp, range(len(self._index))),
                         total=len(self._index),
                         desc=f"Caching {partition} cached vectors in memory (MP, workers={num_workers})",
                     )
                 )
             self._memory_cache = results
             
-    def _load_and_transform_for_mp(self, ind):
-        return self._load_and_transform(ind)
+    def _load_raw_for_mp(self, ind):
+        return self._load_raw(ind)
 
     def __len__(self):
         return len(self._memory_cache) if self._memory_cache is not None else len(self._index)
@@ -424,20 +424,25 @@ class BraTS23CachedVectorDataset(Dataset):
 
     def __getitem__(self, ind):
         if self._memory_cache is not None:
-            return deepcopy(self._memory_cache[ind])
-        return self._load_and_transform(ind)
+            cached = self._memory_cache[ind]
+            sample = {
+                "image": cached["image"].clone(),
+                "label": cached["label"].clone(),
+                "case_id": cached["case_id"],
+            }
+        else:
+            sample = self._load_raw(ind)
+            
+        return self._apply_transforms_and_normalize(sample)
 
-    def _load_and_transform(self, ind):
+    def _load_raw(self, ind):
         record = self._index[ind]
         vector_path = Path(record["vector_path"]).expanduser().resolve()
         sample = self._load_payload(vector_path)
 
-        # Keep cached dtype/shape before instance transforms so heavy transforms
-        # (foreground crop, ET-focused crop) run on cheaper tensors first.
         image = torch.as_tensor(sample["image"])
         label = torch.as_tensor(sample["label"])
 
-        # Accept scalar label [D,H,W] or [1,D,H,W] before transforms.
         if label.ndim == 3:
             label = label.unsqueeze(0)
         elif label.ndim == 4 and label.shape[0] in {1, 3}:
@@ -447,24 +452,27 @@ class BraTS23CachedVectorDataset(Dataset):
                 f"Unsupported cached label shape {tuple(label.shape)} in {vector_path}"
             )
 
-        sample["image"] = image
-        sample["label"] = label
-        sample.setdefault("case_id", record.get("case_id", vector_path.stem))
+        return {
+            "image": image,
+            "label": label,
+            "case_id": record.get("case_id", vector_path.stem),
+        }
+
+    def _apply_transforms_and_normalize(self, sample):
         if self.instance_transforms is not None:
             sample = self.instance_transforms(sample)
 
-        # Normalize final output contract:
-        # - image as float tensor
-        # - label as 3-channel [TC, WT, ET]
         sample["image"] = torch.as_tensor(sample["image"]).float()
         final_label = torch.as_tensor(sample["label"])
+        
         if final_label.ndim == 3 or (final_label.ndim == 4 and final_label.shape[0] == 1):
             final_label = self._to_three_channel_label(final_label)
         elif final_label.ndim == 4 and final_label.shape[0] == 3:
             final_label = final_label.float()
         else:
             raise ValueError(
-                f"Unsupported transformed label shape {tuple(final_label.shape)} in {vector_path}"
+                f"Unsupported transformed label shape {tuple(final_label.shape)}"
             )
+            
         sample["label"] = final_label
         return sample
