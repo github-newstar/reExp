@@ -25,7 +25,7 @@ def collate_fn(dataset_items: list[dict]):
         first_value = values[0]
 
         if torch.is_tensor(first_value):
-            result_batch[key] = torch.stack(values).clone()
+            result_batch[key] = torch.stack(values)
         elif isinstance(first_value, np.ndarray):
             result_batch[key] = torch.from_numpy(np.stack(values))
         elif isinstance(first_value, (int, float, bool)):

@@ -304,6 +304,7 @@ class BraTS23CachedVectorDataset(Dataset):
         instance_transforms=None,
         use_mmap=True,
         cache_in_memory=False,
+        cache_rate=1.0,
     ):
         if partition not in {"train", "val", "test", "all"}:
             raise ValueError(
@@ -344,31 +345,60 @@ class BraTS23CachedVectorDataset(Dataset):
         self.instance_transforms = instance_transforms
         self.use_mmap = bool(use_mmap)
         self.cache_in_memory = bool(cache_in_memory)
+        self.cache_rate = float(cache_rate)
+        if not (0.0 <= self.cache_rate <= 1.0):
+            raise ValueError(f"cache_rate must be in [0, 1], got {self.cache_rate}")
+
         self._memory_cache = None
+        self._memory_cache_by_index = None
         if self.cache_in_memory:
-            # Determine appropriate number of workers
-            # Leave at least 1 core free, cap at a reasonable number to avoid memory spikes
-            num_workers = max(1, min(mp.cpu_count() - 1, 32))
-            
-            self._temp_for_mp = self._index
-            
-            # Use file_system strategy to avoid "received 0 items of ancdata" (file descriptor limit)
-            mp.set_sharing_strategy('file_system')
-            with mp.Pool(processes=num_workers) as pool:
-                results = list(
-                    tqdm(
-                        pool.imap(self._load_raw_for_mp, range(len(self._index))),
-                        total=len(self._index),
-                        desc=f"Caching {partition} cached vectors in memory (MP, workers={num_workers})",
+            cache_indices = self._select_cache_indices(seed=seed)
+            if cache_indices:
+                # Determine appropriate number of workers
+                # Leave at least 1 core free, cap at a reasonable number to avoid memory spikes
+                num_workers = max(1, min(mp.cpu_count() - 1, 32))
+
+                # Use file_system strategy to avoid "received 0 items of ancdata" (file descriptor limit)
+                mp.set_sharing_strategy('file_system')
+                with mp.Pool(processes=num_workers) as pool:
+                    results = list(
+                        tqdm(
+                            pool.imap(self._load_raw_for_mp, cache_indices),
+                            total=len(cache_indices),
+                            desc=(
+                                f"Caching {partition} cached vectors in memory "
+                                f"({len(cache_indices)}/{len(self._index)}, MP, workers={num_workers})"
+                            ),
+                        )
                     )
-                )
-            self._memory_cache = results
-            
+                if len(cache_indices) == len(self._index):
+                    self._memory_cache = results
+                else:
+                    self._memory_cache_by_index = dict(zip(cache_indices, results))
+
+    def _select_cache_indices(self, seed):
+        if self.cache_rate <= 0.0:
+            return []
+
+        n_total = len(self._index)
+        if n_total == 0:
+            return []
+
+        n_cache = int(n_total * self.cache_rate)
+        if self.cache_rate > 0.0:
+            n_cache = max(1, n_cache)
+        n_cache = min(n_total, n_cache)
+        if n_cache == n_total:
+            return list(range(n_total))
+
+        rng = random.Random(seed)
+        return sorted(rng.sample(range(n_total), n_cache))
+
     def _load_raw_for_mp(self, ind):
         return self._load_raw(ind)
 
     def __len__(self):
-        return len(self._memory_cache) if self._memory_cache is not None else len(self._index)
+        return len(self._index)
 
     def _load_payload(self, vector_path):
         """
@@ -423,8 +453,13 @@ class BraTS23CachedVectorDataset(Dataset):
         return torch.stack([tc, wt, et], dim=0).float()
 
     def __getitem__(self, ind):
+        cached = None
         if self._memory_cache is not None:
             cached = self._memory_cache[ind]
+        elif self._memory_cache_by_index is not None:
+            cached = self._memory_cache_by_index.get(ind)
+
+        if cached is not None:
             sample = {
                 "image": cached["image"].clone(),
                 "label": cached["label"].clone(),

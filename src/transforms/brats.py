@@ -130,9 +130,9 @@ class RandETFocusedCropd(MapTransform):
         for key in self.keys:
             tensor = torch.as_tensor(output[key])
             if tensor.ndim == 4:
-                output[key] = tensor[:, z0:z1, y0:y1, x0:x1].contiguous().clone()
+                output[key] = tensor[:, z0:z1, y0:y1, x0:x1]
             elif tensor.ndim == 3:
-                output[key] = tensor[z0:z1, y0:y1, x0:x1].contiguous().clone()
+                output[key] = tensor[z0:z1, y0:y1, x0:x1]
             else:
                 raise ValueError(
                     f"Unsupported tensor rank for key={key}: shape={tuple(tensor.shape)}"
