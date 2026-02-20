@@ -15,11 +15,14 @@ dependencies = [
     "wandb",
     "comet_ml",
     "hydra-core",
+    "omegaconf",
     "monai>=1.5.2",
     "scipy",
     "nibabel",
     "simpleitk",
+    "pillow",
     "einops",
+    "mamba-ssm; platform_system == 'Linux'",
 ]
 
 [dependency-groups]
