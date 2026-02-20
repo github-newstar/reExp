@@ -2,10 +2,10 @@ import random
 from collections import OrderedDict
 from copy import deepcopy
 import json
-import multiprocessing as mp
 from pathlib import Path
 
 import torch
+import torch.multiprocessing as mp
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
@@ -234,7 +234,9 @@ class BraTS23Dataset(Dataset):
         self._memory_cache = None
         if self.cache_in_memory:
             num_workers = max(1, min(mp.cpu_count() - 1, 32))
-
+            
+            # Use file_system strategy to avoid "received 0 items of ancdata" (file descriptor limit)
+            mp.set_sharing_strategy('file_system')
             with mp.Pool(processes=num_workers) as pool:
                 results = list(
                     tqdm(
@@ -350,6 +352,8 @@ class BraTS23CachedVectorDataset(Dataset):
             
             self._temp_for_mp = self._index
             
+            # Use file_system strategy to avoid "received 0 items of ancdata" (file descriptor limit)
+            mp.set_sharing_strategy('file_system')
             with mp.Pool(processes=num_workers) as pool:
                 results = list(
                     tqdm(
