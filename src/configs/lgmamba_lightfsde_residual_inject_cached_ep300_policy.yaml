@@ -1,0 +1,18 @@
+defaults:
+  - lgmamba_lightfsde_cached_ep300_policy
+  - _self_
+
+model:
+  _target_: src.model.LGMambaLightFSDEResidualInjectNet
+  in_channels: 4
+  out_channels: 3
+  feature_channels: [32, 64, 128, 256]
+  mamba_state: 16
+  mamba_conv: 4
+  mamba_expand: 2
+  deep_supervision: true
+  dynamic_eval:
+    enabled: true
+
+writer:
+  run_name: lgm_aug_bs6_ep300_lr1e4_residual_inject

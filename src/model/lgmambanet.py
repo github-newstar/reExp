@@ -227,6 +227,117 @@ class GTSMambaBottleneckPrePostECA(GTSMambaBottleneck):
         return out + residual
 
 
+class GTSMambaBottleneckSpatialPrior(GTSMambaBottleneck):
+    """
+    Post-ECA bottleneck + pre-Mamba local spatial prior encoding.
+
+    Add a lightweight 3x3x3 depthwise conv and LayerNorm before tri-axis
+    Mamba branches to inject local spatial bias.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        grouped_channels = (
+            self.group_proj.out_channels
+            if isinstance(self.group_proj, nn.Conv3d)
+            else channels
+        )
+        self.pre_spatial_dw = nn.Conv3d(
+            grouped_channels,
+            grouped_channels,
+            kernel_size=3,
+            padding=1,
+            groups=grouped_channels,
+            bias=False,
+        )
+        self.pre_spatial_ln = nn.LayerNorm(grouped_channels)
+
+    def _apply_spatial_prior(self, grouped: torch.Tensor) -> torch.Tensor:
+        x = self.pre_spatial_dw(grouped)
+        x = x.permute(0, 2, 3, 4, 1)
+        x = self.pre_spatial_ln(x)
+        x = x.permute(0, 4, 1, 2, 3).contiguous()
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        grouped = self._apply_spatial_prior(grouped)
+
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice(x1)
+        out2 = self._branch_depth_scan(x2)
+        out3 = self._branch_global(x3)
+
+        out = torch.cat([out1, out2, out3], dim=1)
+        out = self.channel_interaction(out)
+        out = self.fuse(out)
+        return out + residual
+
+
+class GTSMambaBottleneckResidualInject(GTSMambaBottleneck):
+    """
+    Post-ECA bottleneck + multi-scale residual injection path.
+
+    Bypass grouped input features through a 1x1x1 Conv+Sigmoid gate and inject
+    them into tri-axis Mamba outputs before post-ECA fusion.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        grouped_channels = (
+            self.group_proj.out_channels
+            if isinstance(self.group_proj, nn.Conv3d)
+            else channels
+        )
+        self.inject_gate = nn.Sequential(
+            nn.Conv3d(grouped_channels, grouped_channels, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        bypass = grouped
+
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice(x1)
+        out2 = self._branch_depth_scan(x2)
+        out3 = self._branch_global(x3)
+
+        out = torch.cat([out1, out2, out3], dim=1)
+        out = out + bypass * self.inject_gate(bypass)
+        out = self.channel_interaction(out)
+        out = self.fuse(out)
+        return out + residual
+
+
 class LGMambaNet(nn.Module):
     """
     L-MambaNet variant with GTS-Mamba bottleneck (LGMambaNet).

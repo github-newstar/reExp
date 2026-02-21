@@ -6,6 +6,8 @@ from src.model.lgmambanet import (
     GTSMambaBottleneck,
     GTSMambaBottleneckPreECA,
     GTSMambaBottleneckPrePostECA,
+    GTSMambaBottleneckResidualInject,
+    GTSMambaBottleneckSpatialPrior,
 )
 from src.model.lmambanet import DIDCBlock
 
@@ -398,6 +400,86 @@ class LGMambaLightFSDEPrePostECANet(LGMambaLightFSDENet):
         )
         c4 = int(feature_channels[3])
         self.bottleneck = GTSMambaBottleneckPrePostECA(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDESpatialPriorNet(LGMambaLightFSDENet):
+    """
+    LGMamba LightFSDE variant with pre-Mamba spatial local prior encoding
+    (DWConv3d + LayerNorm) in bottleneck.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle=use_channel_shuffle,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckSpatialPrior(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEResidualInjectNet(LGMambaLightFSDENet):
+    """
+    LGMamba LightFSDE variant with multi-scale residual injection path in
+    bottleneck.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle=use_channel_shuffle,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckResidualInject(
             channels=c4,
             mamba_state=mamba_state,
             mamba_conv=mamba_conv,

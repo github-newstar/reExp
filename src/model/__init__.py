@@ -4,6 +4,8 @@ from src.model.lgmamba_fsde import (
     LGMambaLightFSDENet,
     LGMambaLightFSDEPreECANet,
     LGMambaLightFSDEPrePostECANet,
+    LGMambaLightFSDEResidualInjectNet,
+    LGMambaLightFSDESpatialPriorNet,
     LGMambaLightFSDENoShuffleNet,
     LGMambaLightFSDEShallowPlainNet,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "LGMambaLightFSDENet",
     "LGMambaLightFSDEPreECANet",
     "LGMambaLightFSDEPrePostECANet",
+    "LGMambaLightFSDEResidualInjectNet",
+    "LGMambaLightFSDESpatialPriorNet",
     "LGMambaLightFSDENoShuffleNet",
     "LGMambaLightFSDEShallowPlainNet",
     "LGMambaNet",
