@@ -364,6 +364,64 @@ class GTSMambaBottleneckResidualInject(GTSMambaBottleneck):
         return out + residual
 
 
+class GTSMambaBottleneckECAMambaECAMamba(GTSMambaBottleneck):
+    """
+    Bottleneck sequence: ECA -> tri-axis Mamba -> ECA -> tri-axis Mamba.
+
+    The original post-fusion ECA in base bottleneck is disabled to keep the
+    sequence explicit and avoid adding extra attention blocks.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        grouped_channels = (
+            self.group_proj.out_channels
+            if isinstance(self.group_proj, nn.Conv3d)
+            else channels
+        )
+        self.eca1 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+        self.eca2 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+        self.channel_interaction = nn.Identity()
+
+    def _run_tri_axis_mamba(self, grouped: torch.Tensor) -> torch.Tensor:
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice(x1)
+        out2 = self._branch_depth_scan(x2)
+        out3 = self._branch_global(x3)
+        return torch.cat([out1, out2, out3], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        grouped = self.eca1(grouped)
+        grouped = self._run_tri_axis_mamba(grouped)
+        grouped = self.eca2(grouped)
+        grouped = self._run_tri_axis_mamba(grouped)
+        out = self.fuse(grouped)
+        return out + residual
+
+
 class LGMambaNet(nn.Module):
     """
     L-MambaNet variant with GTS-Mamba bottleneck (LGMambaNet).

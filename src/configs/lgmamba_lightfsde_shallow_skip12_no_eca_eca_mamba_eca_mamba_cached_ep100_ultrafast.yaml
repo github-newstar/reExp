@@ -1,0 +1,44 @@
+defaults:
+  - lgmamba_lightfsde_cached_ep300_policy
+  - _self_
+
+model:
+  _target_: src.model.LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet
+  in_channels: 4
+  out_channels: 3
+  feature_channels: [32, 64, 128, 256]
+  mamba_state: 16
+  mamba_conv: 4
+  mamba_expand: 2
+  deep_supervision: true
+  use_channel_shuffle_deep: true
+
+writer:
+  run_name: lgm_shallow_skip12_no_eca_eca_mamba_eca_mamba_ep100_ultrafast_3_2_lastfull
+
+datasets:
+  train:
+    usage_ratio: 1.0
+  val:
+    usage_ratio: 1.0
+
+trainer:
+  n_epochs: 100
+  warmup:
+    enabled: true
+    epochs: 10
+  validation_policy:
+    enabled: true
+    default_mode: quick
+    always_eval_epoch1: true
+    phases:
+      - max_epoch_ratio: 0.5
+        interval: 3
+        mode: quick
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: quick
+    full_eval:
+      enabled: true
+      interval: 0
+      epochs: [100]
