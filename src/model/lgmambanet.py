@@ -422,6 +422,75 @@ class GTSMambaBottleneckECAMambaECAMamba(GTSMambaBottleneck):
         return out + residual
 
 
+class GTSMambaBottleneckDWConvMambaDWConvMamba(GTSMambaBottleneck):
+    """
+    Bottleneck sequence: DW-Conv3D -> tri-axis Mamba -> DW-Conv3D -> tri-axis Mamba.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        grouped_channels = (
+            self.group_proj.out_channels
+            if isinstance(self.group_proj, nn.Conv3d)
+            else channels
+        )
+        self.dw1 = nn.Sequential(
+            nn.Conv3d(
+                grouped_channels,
+                grouped_channels,
+                kernel_size=3,
+                padding=1,
+                groups=grouped_channels,
+                bias=False,
+            ),
+            nn.InstanceNorm3d(grouped_channels),
+            nn.SiLU(inplace=True),
+        )
+        self.dw2 = nn.Sequential(
+            nn.Conv3d(
+                grouped_channels,
+                grouped_channels,
+                kernel_size=3,
+                padding=1,
+                groups=grouped_channels,
+                bias=False,
+            ),
+            nn.InstanceNorm3d(grouped_channels),
+            nn.SiLU(inplace=True),
+        )
+        self.channel_interaction = nn.Identity()
+
+    def _run_tri_axis_mamba(self, grouped: torch.Tensor) -> torch.Tensor:
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice(x1)
+        out2 = self._branch_depth_scan(x2)
+        out3 = self._branch_global(x3)
+        return torch.cat([out1, out2, out3], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        grouped = self.dw1(grouped)
+        grouped = self._run_tri_axis_mamba(grouped)
+        grouped = self.dw2(grouped)
+        grouped = self._run_tri_axis_mamba(grouped)
+        out = self.fuse(grouped)
+        return out + residual
+
+
 class LGMambaNet(nn.Module):
     """
     L-MambaNet variant with GTS-Mamba bottleneck (LGMambaNet).

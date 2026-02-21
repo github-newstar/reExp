@@ -14,6 +14,7 @@ from src.model.lgmamba_fsde import (
     LGMambaLightFSDEShallowECAMambaECAMambaNet,
     LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet,
     LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaDec3NoECANet,
+    LGMambaLightFSDEShallowSkip12NoECA_DWConvMambaDWConvMambaNet,
 )
 from src.model.lgmambanet import LGMambaNet
 from src.model.lmambanet import LMambaNet
@@ -37,6 +38,7 @@ __all__ = [
     "LGMambaLightFSDEShallowECAMambaECAMambaNet",
     "LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet",
     "LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaDec3NoECANet",
+    "LGMambaLightFSDEShallowSkip12NoECA_DWConvMambaDWConvMambaNet",
     "LGMambaNet",
     "LMambaNet",
     "NoNewNet",
