@@ -678,6 +678,13 @@ class GTSMambaBottleneckDWConvMambaECAMambaECA(GTSMambaBottleneck):
 
         self.channel_interaction = nn.Identity()
 
+    def _run_tri_axis_mamba(self, grouped: torch.Tensor) -> torch.Tensor:
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice(x1)
+        out2 = self._branch_depth_scan(x2)
+        out3 = self._branch_global(x3)
+        return torch.cat([out1, out2, out3], dim=1)
+
     def _branch_intra_slice_b(self, x1: torch.Tensor) -> torch.Tensor:
         b, cg, d, h, w = x1.shape
         seq = x1.permute(0, 2, 3, 4, 1).reshape(b * d, h * w, cg)
