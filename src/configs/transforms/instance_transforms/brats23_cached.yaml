@@ -1,6 +1,9 @@
 train:
   _target_: monai.transforms.Compose
   transforms:
+    - _target_: monai.transforms.EnsureTyped
+      keys: ["image", "label"]
+      track_meta: false
     - _target_: src.transforms.RandETFocusedCropd
       keys: ["image", "label"]
       roi_size: [96, 96, 96]
@@ -8,6 +11,7 @@ train:
       et_channel: 2
       wt_channel: 1
       et_focus_prob: 0.7
+      random_prob: 0.33
     - _target_: monai.transforms.RandFlipd
       keys: ["image", "label"]
       prob: 0.5
@@ -20,19 +24,43 @@ train:
       keys: ["image", "label"]
       prob: 0.5
       spatial_axis: 2
+    - _target_: monai.transforms.RandAffined
+      keys: ["image", "label"]
+      mode: ["bilinear", "nearest"]
+      prob: 0.2
+      rotate_range: [0.5236, 0.5236, 0.5236]
+      scale_range: [0.3, 0.3, 0.3]
+      padding_mode: "zeros"
+    - _target_: monai.transforms.RandGaussianNoised
+      keys: ["image"]
+      prob: 0.1
+      mean: 0.0
+      std: 0.1
+    - _target_: monai.transforms.RandGaussianSmoothd
+      keys: ["image"]
+      prob: 0.2
+      sigma_x: [0.5, 1.15]
+      sigma_y: [0.5, 1.15]
+      sigma_z: [0.5, 1.15]
     - _target_: monai.transforms.RandScaleIntensityd
       keys: ["image"]
-      factors: 0.1
-      prob: 1.0
+      factors: 0.25
+      prob: 0.15
     - _target_: monai.transforms.RandShiftIntensityd
       keys: ["image"]
       offsets: 0.1
-      prob: 1.0
+      prob: 0.1
+    - _target_: monai.transforms.RandAdjustContrastd
+      keys: ["image"]
+      prob: 0.15
+      gamma: [0.7, 1.5]
     - _target_: monai.transforms.EnsureTyped
       keys: ["image", "label"]
+      track_meta: false
 
 inference:
   _target_: monai.transforms.Compose
   transforms:
     - _target_: monai.transforms.EnsureTyped
       keys: ["image", "label"]
+      track_meta: false

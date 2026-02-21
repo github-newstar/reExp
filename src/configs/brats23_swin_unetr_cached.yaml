@@ -52,6 +52,39 @@ trainer:
     log_all: False
   epoch_len: null
   eval_interval: 1
+  validation_policy:
+    enabled: False
+    default_mode: quick
+    always_eval_epoch1: True
+    phases:
+      - max_epoch_ratio: 0.5
+        interval: 20
+        mode: quick
+      - max_epoch_ratio: 0.8
+        interval: 10
+        mode: quick
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: quick
+    full_eval:
+      enabled: False
+      interval: 50
+      epochs: []
+    quick:
+      max_batches: 32
+      roi_size: ${trainer.sw_roi_size}
+      random_crop: True
+      pad_if_needed: True
+      use_sliding_window: False
+    post_training_full_eval:
+      enabled: False
+      save_candidates: False
+      top_k: 5
+      metric: "val_MeanDice"
+      mode: max
+      source_modes: ["quick"]
+      partitions: ["val"]
+      save_summary_path: "post_full_eval_summary.json"
   use_sliding_window_inference: True
   sw_roi_size: [96, 96, 96]
   sw_batch_size: 1

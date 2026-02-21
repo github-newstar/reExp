@@ -1,3 +1,4 @@
+import json
 from abc import abstractmethod
 
 import torch
@@ -104,6 +105,24 @@ class BaseTrainer:
         if not self.dynamic_eval_cfg:
             self.dynamic_eval_cfg = self.config.get("model", {}).get("dynamic_eval", {})
         self.dynamic_eval_enabled = bool(self.dynamic_eval_cfg.get("enabled", False))
+        self.validation_policy_cfg = self.cfg_trainer.get("validation_policy", {})
+        self.validation_policy_enabled = bool(
+            self.validation_policy_cfg.get("enabled", False)
+        )
+        self.default_eval_mode = str(
+            self.validation_policy_cfg.get("default_mode", "full")
+        ).lower()
+        if self.default_eval_mode not in {"quick", "full"}:
+            raise ValueError(
+                "trainer.validation_policy.default_mode must be 'quick' or 'full', "
+                f"got {self.default_eval_mode!r}"
+            )
+        self.current_eval_mode = "full"
+        self.current_eval_quick_cfg = {}
+        self._eval_history = []
+        self._saved_checkpoint_epochs = set()
+        self._last_epoch_eval_ran = False
+        self._last_epoch_eval_mode = "full"
 
         # mixed precision setup (AMP)
         self.amp_enabled = bool(self.cfg_trainer.get("amp", False))
@@ -343,6 +362,268 @@ class BaseTrainer:
             self._save_checkpoint(self._last_epoch, save_best=False)
             raise e
 
+    def _resolve_legacy_eval_schedule(self, epoch):
+        """
+        Resolve evaluation schedule when validation_policy is disabled.
+        """
+        is_eval_epoch = False
+        current_interval = self.eval_interval
+        mode = "full"
+
+        if epoch == 1:
+            is_eval_epoch = True
+        elif self.dynamic_eval_enabled:
+            progress = epoch / self.epochs
+
+            # For short runs (<= 100 epochs)
+            if self.epochs <= 100:
+                if progress <= 0.5:
+                    current_interval = 5
+                elif progress <= 0.8:
+                    current_interval = 2
+                else:
+                    current_interval = 1
+            # For long runs (> 100 epochs)
+            else:
+                if progress <= 0.5:
+                    current_interval = 20
+                elif progress <= 0.8:
+                    current_interval = 10
+                elif progress <= 0.9:
+                    current_interval = 5
+                else:
+                    current_interval = 2
+
+            is_eval_epoch = epoch % current_interval == 0
+        else:
+            is_eval_epoch = epoch % self.eval_interval == 0
+
+        return {
+            "run_eval": bool(is_eval_epoch),
+            "mode": mode,
+            "interval": int(current_interval),
+            "reason": "legacy_dynamic_eval" if self.dynamic_eval_enabled else "eval_interval",
+        }
+
+    def _resolve_policy_eval_schedule(self, epoch):
+        """
+        Resolve evaluation schedule/mode from trainer.validation_policy.
+        """
+        cfg = self.validation_policy_cfg
+        run_eval = False
+        mode = self.default_eval_mode
+
+        always_eval_epoch1 = bool(cfg.get("always_eval_epoch1", True))
+        if always_eval_epoch1 and epoch == 1:
+            run_eval = True
+
+        progress = epoch / self.epochs if self.epochs > 0 else 1.0
+        phases = list(cfg.get("phases", []))
+        selected_phase = None
+        for phase in phases:
+            max_ratio = float(phase.get("max_epoch_ratio", 1.0))
+            if progress <= max_ratio:
+                selected_phase = phase
+                break
+        if selected_phase is None and phases:
+            selected_phase = phases[-1]
+
+        if selected_phase is not None:
+            mode = str(selected_phase.get("mode", mode)).lower()
+            interval = int(selected_phase.get("interval", self.eval_interval))
+        else:
+            mode = str(cfg.get("mode", mode)).lower()
+            interval = int(cfg.get("interval", self.eval_interval))
+
+        if mode not in {"quick", "full"}:
+            raise ValueError(
+                "trainer.validation_policy mode must be 'quick' or 'full', "
+                f"got {mode!r}"
+            )
+
+        if interval > 0 and epoch % interval == 0:
+            run_eval = True
+
+        full_eval_cfg = cfg.get("full_eval", {})
+        if bool(full_eval_cfg.get("enabled", False)):
+            full_interval = int(full_eval_cfg.get("interval", 0))
+            full_epochs = {int(x) for x in list(full_eval_cfg.get("epochs", []))}
+            force_full = (full_interval > 0 and epoch % full_interval == 0) or (
+                epoch in full_epochs
+            )
+            if force_full:
+                run_eval = True
+                mode = "full"
+
+        return {
+            "run_eval": bool(run_eval),
+            "mode": mode,
+            "interval": int(interval),
+            "reason": "validation_policy",
+        }
+
+    def _resolve_eval_schedule(self, epoch):
+        if self.validation_policy_enabled:
+            return self._resolve_policy_eval_schedule(epoch)
+        return self._resolve_legacy_eval_schedule(epoch)
+
+    def _resolve_eval_max_batches(self, eval_mode):
+        if eval_mode != "quick":
+            return None
+        quick_cfg = self.validation_policy_cfg.get("quick", {})
+        max_batches = quick_cfg.get("max_batches")
+        if max_batches is None:
+            return None
+        max_batches = int(max_batches)
+        if max_batches < 1:
+            raise ValueError(
+                "trainer.validation_policy.quick.max_batches must be >= 1 or null, "
+                f"got {max_batches!r}"
+            )
+        return max_batches
+
+    def _record_eval_history(self, epoch, part, eval_mode, logs):
+        self._eval_history.append(
+            {
+                "epoch": int(epoch),
+                "part": str(part),
+                "mode": str(eval_mode),
+                "metrics": {k: float(v) for k, v in logs.items()},
+            }
+        )
+
+    def _run_post_training_full_eval(self):
+        """
+        Optionally run full validation on top-k checkpoints selected by quick-eval scores.
+        """
+        if not self.validation_policy_enabled:
+            return
+        cfg = self.validation_policy_cfg.get("post_training_full_eval", {})
+        if not bool(cfg.get("enabled", False)):
+            return
+        if not self.is_main_process:
+            return
+        if self.is_distributed:
+            self.logger.warning(
+                "post_training_full_eval is skipped in distributed mode. "
+                "Run single-process validation for top-k checkpoints if needed."
+            )
+            return
+
+        metric_key = str(cfg.get("metric", "val_MeanDice"))
+        if "_" not in metric_key:
+            self.logger.warning(
+                "post_training_full_eval.metric should look like 'val_MeanDice'. "
+                f"Got {metric_key!r}. Skipping."
+            )
+            return
+        metric_part, metric_name = metric_key.split("_", 1)
+        if metric_part not in self.evaluation_dataloaders:
+            self.logger.warning(
+                f"post_training_full_eval partition {metric_part!r} is not available in "
+                f"evaluation dataloaders {list(self.evaluation_dataloaders.keys())}. Skipping."
+            )
+            return
+
+        source_modes = [str(x).lower() for x in list(cfg.get("source_modes", ["quick"]))]
+        ranking_mode = str(cfg.get("mode", "max")).lower()
+        if ranking_mode not in {"max", "min"}:
+            raise ValueError(
+                "trainer.validation_policy.post_training_full_eval.mode must be 'max' or 'min', "
+                f"got {ranking_mode!r}"
+            )
+
+        top_k = max(1, int(cfg.get("top_k", 5)))
+        by_epoch = {}
+        for record in self._eval_history:
+            if record["part"] != metric_part:
+                continue
+            if source_modes and record["mode"] not in source_modes:
+                continue
+            if metric_name not in record["metrics"]:
+                continue
+            by_epoch[int(record["epoch"])] = float(record["metrics"][metric_name])
+
+        if not by_epoch:
+            self.logger.warning(
+                "No evaluation history found for post_training_full_eval. Skipping."
+            )
+            return
+
+        ranked_epochs = sorted(
+            by_epoch.items(),
+            key=lambda item: item[1],
+            reverse=ranking_mode == "max",
+        )
+        selected = []
+        for epoch, score in ranked_epochs:
+            checkpoint_path = self.checkpoint_dir / f"checkpoint-epoch{epoch}.pth"
+            if checkpoint_path.exists():
+                selected.append((epoch, score, checkpoint_path))
+            if len(selected) >= top_k:
+                break
+
+        if not selected:
+            self.logger.warning(
+                "No checkpoint files found for selected top-k epochs. "
+                "Set save_period smaller or keep candidate checkpoints."
+            )
+            return
+
+        eval_parts = list(cfg.get("partitions", [metric_part]))
+        unknown_parts = [p for p in eval_parts if p not in self.evaluation_dataloaders]
+        if unknown_parts:
+            raise ValueError(
+                "trainer.validation_policy.post_training_full_eval.partitions contains "
+                f"unknown partitions: {unknown_parts}"
+            )
+
+        model_ref = self._model_for_state_dict()
+        summary = {
+            "metric": metric_key,
+            "ranking_mode": ranking_mode,
+            "source_modes": source_modes,
+            "top_k": top_k,
+            "candidates": [
+                {"epoch": int(epoch), "score": float(score), "checkpoint": str(path)}
+                for epoch, score, path in selected
+            ],
+            "full_eval_results": [],
+        }
+
+        self.logger.info(
+            "Starting post-training full evaluation on top-%d checkpoints.", len(selected)
+        )
+        for epoch, quick_score, checkpoint_path in selected:
+            checkpoint = torch.load(str(checkpoint_path), self.device)
+            model_ref.load_state_dict(checkpoint["state_dict"])
+            candidate_result = {
+                "epoch": int(epoch),
+                "quick_score": float(quick_score),
+                "checkpoint": str(checkpoint_path),
+                "metrics": {},
+            }
+            for part in eval_parts:
+                logs = self._evaluation_epoch(
+                    epoch=epoch,
+                    part=part,
+                    dataloader=self.evaluation_dataloaders[part],
+                    eval_mode="full",
+                    max_batches=None,
+                )
+                for name, value in logs.items():
+                    candidate_result["metrics"][f"{part}_{name}"] = float(value)
+            summary["full_eval_results"].append(candidate_result)
+
+        summary_path = self.checkpoint_dir / str(
+            cfg.get("save_summary_path", "post_full_eval_summary.json")
+        )
+        with summary_path.open("w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        self.logger.info(
+            "Post-training full evaluation finished. Summary saved to %s", summary_path
+        )
+
     def _train_process(self):
         """
         Full training logic:
@@ -390,12 +671,30 @@ class BaseTrainer:
 
             if epoch % self.save_period == 0 or best:
                 self._save_checkpoint(epoch, save_best=best, only_best=True)
+            force_candidate_save = False
+            if self.validation_policy_enabled and self._last_epoch_eval_ran:
+                post_cfg = self.validation_policy_cfg.get("post_training_full_eval", {})
+                if bool(post_cfg.get("enabled", False)) and bool(
+                    post_cfg.get("save_candidates", False)
+                ):
+                    source_modes = [
+                        str(x).lower()
+                        for x in list(post_cfg.get("source_modes", ["quick"]))
+                    ]
+                    if (not source_modes) or (self._last_epoch_eval_mode in source_modes):
+                        metric_key = str(post_cfg.get("metric", "val_MeanDice"))
+                        if metric_key in logs:
+                            force_candidate_save = True
+            if force_candidate_save and int(epoch) not in self._saved_checkpoint_epochs:
+                self._save_checkpoint(epoch, save_best=False, only_best=False)
 
             if self.is_distributed and dist.is_available() and dist.is_initialized():
                 dist.barrier()
 
             if stop_process:  # early_stop
                 break
+
+        self._run_post_training_full_eval()
 
     def _train_epoch(self, epoch):
         """
@@ -472,36 +771,40 @@ class BaseTrainer:
         run_eval_on_this_rank = (
             (not self.is_distributed) or self.distributed_eval or self.is_main_process
         )
-        is_eval_epoch = False
-        current_interval = self.eval_interval
-        if epoch == 1:
-            is_eval_epoch = True
-        elif self.dynamic_eval_enabled:
-            progress = epoch / self.epochs
-            if progress <= 0.5:
-                current_interval = 5
-            elif progress <= 0.8:
-                current_interval = 2
-            else:
-                current_interval = 1
-            is_eval_epoch = (epoch % current_interval == 0)
-        else:
-            is_eval_epoch = (epoch % self.eval_interval == 0)
-
-        run_eval_this_epoch = len(self.evaluation_dataloaders) > 0 and is_eval_epoch
+        eval_schedule = self._resolve_eval_schedule(epoch)
+        run_eval_this_epoch = (
+            len(self.evaluation_dataloaders) > 0 and eval_schedule["run_eval"]
+        )
+        eval_mode = eval_schedule["mode"]
+        eval_max_batches = self._resolve_eval_max_batches(eval_mode=eval_mode)
 
         if run_eval_on_this_rank and run_eval_this_epoch:
             for part, dataloader in self.evaluation_dataloaders.items():
-                val_logs = self._evaluation_epoch(epoch, part, dataloader)
+                val_logs = self._evaluation_epoch(
+                    epoch=epoch,
+                    part=part,
+                    dataloader=dataloader,
+                    eval_mode=eval_mode,
+                    max_batches=eval_max_batches,
+                )
                 logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
+                self._record_eval_history(
+                    epoch=epoch, part=part, eval_mode=eval_mode, logs=val_logs
+                )
         elif run_eval_on_this_rank and len(self.evaluation_dataloaders) > 0:
             self.logger.info(
-                f"Skip evaluation at epoch {epoch}: (dynamic_eval={self.dynamic_eval_enabled}, current_interval={current_interval})."
+                "Skip evaluation at epoch %d: reason=%s, interval=%s, mode=%s",
+                epoch,
+                eval_schedule["reason"],
+                eval_schedule["interval"],
+                eval_schedule["mode"],
             )
 
+        self._last_epoch_eval_ran = bool(run_eval_this_epoch)
+        self._last_epoch_eval_mode = str(eval_mode)
         return logs
 
-    def _evaluation_epoch(self, epoch, part, dataloader):
+    def _evaluation_epoch(self, epoch, part, dataloader, eval_mode="full", max_batches=None):
         """
         Evaluate model on the partition after training for an epoch.
 
@@ -513,6 +816,16 @@ class BaseTrainer:
             logs (dict): logs that contain the information about evaluation.
         """
         self.is_train = False
+        self.current_eval_mode = str(eval_mode).lower()
+        if self.current_eval_mode not in {"quick", "full"}:
+            raise ValueError(
+                f"Unknown eval_mode={self.current_eval_mode!r}. Expected 'quick' or 'full'."
+            )
+        self.current_eval_quick_cfg = (
+            dict(self.validation_policy_cfg.get("quick", {}))
+            if self.current_eval_mode == "quick"
+            else {}
+        )
         self.model.eval()
         self.evaluation_metrics.reset()
         eval_sampler = getattr(dataloader, "sampler", None)
@@ -521,13 +834,18 @@ class BaseTrainer:
         et_search_state = self._build_et_threshold_search_state(part=part)
         last_batch_idx = None
         last_batch = None
+        total_batches = len(dataloader)
+        if max_batches is not None:
+            total_batches = min(total_batches, int(max_batches))
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader),
-                desc=part,
-                total=len(dataloader),
+                desc=f"{part}:{self.current_eval_mode}",
+                total=total_batches,
                 disable=not self.is_main_process,
             ):
+                if max_batches is not None and batch_idx >= int(max_batches):
+                    break
                 batch = self.process_batch(
                     batch,
                     metrics=self.evaluation_metrics,
@@ -545,6 +863,13 @@ class BaseTrainer:
                 self._log_batch(
                     last_batch_idx, last_batch, part
                 )  # log only the last batch during inference
+            if last_batch_idx is None:
+                self.logger.warning(
+                    "No batches were evaluated for part=%s, mode=%s (max_batches=%s).",
+                    part,
+                    self.current_eval_mode,
+                    max_batches,
+                )
 
         logs = self.evaluation_metrics.result()
         if et_search_state is not None:
@@ -552,6 +877,8 @@ class BaseTrainer:
             logs.update(et_logs)
             for key, value in et_logs.items():
                 self.writer.add_scalar(key, value)
+        self.current_eval_mode = "full"
+        self.current_eval_quick_cfg = {}
 
         return logs
 
@@ -759,6 +1086,7 @@ class BaseTrainer:
         filename = str(self.checkpoint_dir / f"checkpoint-epoch{epoch}.pth")
         if not (only_best and save_best):
             torch.save(state, filename)
+            self._saved_checkpoint_epochs.add(int(epoch))
             if self.config.writer.log_checkpoints:
                 self.writer.add_checkpoint(filename, str(self.checkpoint_dir.parent))
             self.logger.info(f"Saving checkpoint: {filename} ...")

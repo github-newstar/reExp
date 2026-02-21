@@ -1,10 +1,10 @@
 defaults:
-  - model: swin_unetr_brats23
+  - model: lgmamba_lightfsde
   - writer: wandb
   - metrics: brats23_seg
-  - datasets: brats23
+  - datasets: brats23_cached_notest
   - dataloader: brats23
-  - transforms: brats23
+  - transforms: brats23_cached
   - _self_
 
 optimizer:
@@ -24,38 +24,63 @@ loss_function:
   alpha: null
 
 writer:
+  mode: online
+  run_name: lgm_aug_bs6_ep300_lr1e4
   loss_names: ["loss", "loss_dice", "loss_focal", "loss_ds"]
+
+dataloader:
+  batch_size: 6
+  eval_batch_size: 1
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 2
+  pin_memory: true
+
+datasets:
+  train:
+    cache_dir: "${oc.env:CACHE_DIR,/cloud/cloud-ssd1/cached}"
+    cache_in_memory: false
+    use_mmap: true
+    usage_ratio: 1.0
+  val:
+    cache_dir: "${oc.env:CACHE_DIR,/cloud/cloud-ssd1/cached}"
+    cache_in_memory: false
+    use_mmap: false
+    usage_ratio: 1.0
 
 trainer:
   log_step: 10
-  n_epochs: 100
+  n_epochs: 300
+  eval_partitions: ["val"]
   ddp:
     enabled: auto
     backend: nccl
     find_unused_parameters: false
     distributed_eval: true
+  dynamic_eval:
+    enabled: true
   lr_scheduler_step_per: epoch
   warmup:
-    enabled: False
-    epochs: 5
+    enabled: true
+    epochs: 30
     start_factor: 0.1
     end_factor: 1.0
-  amp: False
+  amp: true
   amp_dtype: bf16
   et_threshold_search:
-    enabled: False
+    enabled: false
     parts: ["val"]
     channel_index: 2
     thresholds: [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
-    apply_sigmoid: True
+    apply_sigmoid: true
     smooth: 1e-5
-    log_all: False
+    log_all: false
   epoch_len: null
   eval_interval: 1
   validation_policy:
-    enabled: False
+    enabled: true
     default_mode: quick
-    always_eval_epoch1: True
+    always_eval_epoch1: true
     phases:
       - max_epoch_ratio: 0.5
         interval: 20
@@ -67,32 +92,32 @@ trainer:
         interval: 2
         mode: quick
     full_eval:
-      enabled: False
+      enabled: false
       interval: 50
       epochs: []
     quick:
       max_batches: 32
       roi_size: ${trainer.sw_roi_size}
-      random_crop: True
-      pad_if_needed: True
-      use_sliding_window: False
+      random_crop: true
+      pad_if_needed: true
+      use_sliding_window: false
     post_training_full_eval:
-      enabled: False
-      save_candidates: False
+      enabled: true
+      save_candidates: true
       top_k: 5
       metric: "val_MeanDice"
       mode: max
       source_modes: ["quick"]
       partitions: ["val"]
       save_summary_path: "post_full_eval_summary.json"
-  use_sliding_window_inference: True
+  use_sliding_window_inference: true
   sw_roi_size: [96, 96, 96]
-  sw_batch_size: 1
+  sw_batch_size: 4
   sw_overlap: 0.5
   device_tensors: ["image", "label"]
   resume_from: null
   device: auto
-  override: False
+  override: true
   monitor: "max val_MeanDice"
   save_period: 10
   early_stop: ${trainer.n_epochs}

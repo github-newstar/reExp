@@ -1,0 +1,31 @@
+train:
+  _target_: src.datasets.BraTS23CachedVectorDataset
+  cache_dir: "${oc.env:CACHE_DIR,/cloud/cloud-ssd1/cached}"
+  use_mmap: true
+  cache_rate: 1.0
+  partition: "train"
+  usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
+  fold: 0
+  n_folds: 5
+  seed: 42
+  cache_in_memory: false
+  instance_transforms: ${transforms.instance_transforms.train}
+
+val:
+  _target_: src.datasets.BraTS23CachedVectorDataset
+  cache_dir: "${oc.env:CACHE_DIR,/cloud/cloud-ssd1/cached}"
+  use_mmap: false
+  cache_rate: 1.0
+  partition: "val"
+  usage_ratio: 1.0
+  split_strategy: "three_way"
+  val_ratio: 0.1
+  test_ratio: 0.1
+  fold: 0
+  n_folds: 5
+  seed: 42
+  cache_in_memory: false
+  instance_transforms: ${transforms.instance_transforms.inference}

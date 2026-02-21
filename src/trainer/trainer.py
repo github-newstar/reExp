@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from monai.inferers import sliding_window_inference
 
 from src.metrics.tracker import MetricTracker
@@ -34,9 +35,14 @@ class Trainer(BaseTrainer):
         """
         image = batch["image"]
         model = self._model_for_inference()
-        use_sw = (not self.is_train) and self.cfg_trainer.get(
-            "use_sliding_window_inference", False
-        )
+        use_sw = False
+        if not self.is_train:
+            eval_mode = str(getattr(self, "current_eval_mode", "full")).lower()
+            if eval_mode == "quick":
+                quick_cfg = getattr(self, "current_eval_quick_cfg", {}) or {}
+                use_sw = bool(quick_cfg.get("use_sliding_window", False))
+            else:
+                use_sw = bool(self.cfg_trainer.get("use_sliding_window_inference", False))
         if not use_sw:
             outputs = model(**batch)
             if not isinstance(outputs, dict) or "logits" not in outputs:
@@ -57,6 +63,87 @@ class Trainer(BaseTrainer):
             overlap=overlap,
         )
         return {"logits": logits}
+
+    @staticmethod
+    def _pad_to_roi_size(tensor, roi_size):
+        """
+        Pad tensor [B, C, D, H, W] to at least roi_size on spatial dims.
+        Padding is appended to the end of each spatial axis.
+        """
+        if tensor.ndim != 5:
+            raise ValueError(f"Expected 5D tensor, got shape={tuple(tensor.shape)}")
+        d, h, w = tensor.shape[2:]
+        pad_d = max(0, int(roi_size[0]) - int(d))
+        pad_h = max(0, int(roi_size[1]) - int(h))
+        pad_w = max(0, int(roi_size[2]) - int(w))
+        if pad_d == 0 and pad_h == 0 and pad_w == 0:
+            return tensor
+        return F.pad(tensor, (0, pad_w, 0, pad_h, 0, pad_d))
+
+    def _prepare_quick_validation_batch(self, batch):
+        """
+        Build random (or center) ROI patches for quick validation.
+        """
+        quick_cfg = getattr(self, "current_eval_quick_cfg", {}) or {}
+        roi_size = quick_cfg.get("roi_size", self.cfg_trainer.get("sw_roi_size", [96, 96, 96]))
+        roi_size = tuple(int(x) for x in roi_size)
+        if len(roi_size) != 3:
+            raise ValueError(
+                "quick validation roi_size must have 3 ints, "
+                f"got {roi_size!r}"
+            )
+        random_crop = bool(quick_cfg.get("random_crop", True))
+        pad_if_needed = bool(quick_cfg.get("pad_if_needed", True))
+
+        image = batch["image"]
+        label = batch["label"]
+        if image.ndim != 5 or label.ndim != 5:
+            return batch
+        if image.shape[0] != label.shape[0]:
+            raise ValueError(
+                "image and label batch size mismatch in quick validation: "
+                f"{image.shape[0]} vs {label.shape[0]}"
+            )
+
+        cropped_images = []
+        cropped_labels = []
+        for idx in range(image.shape[0]):
+            img = image[idx : idx + 1]
+            lbl = label[idx : idx + 1]
+
+            slices = []
+            for dim_size, target in zip(img.shape[2:], roi_size):
+                if int(dim_size) > int(target):
+                    if random_crop:
+                        start = int(
+                            torch.randint(
+                                low=0,
+                                high=int(dim_size) - int(target) + 1,
+                                size=(1,),
+                                device=img.device,
+                            ).item()
+                        )
+                    else:
+                        start = (int(dim_size) - int(target)) // 2
+                    end = start + int(target)
+                else:
+                    start = 0
+                    end = int(dim_size)
+                slices.append(slice(start, end))
+
+            img_crop = img[:, :, slices[0], slices[1], slices[2]]
+            lbl_crop = lbl[:, :, slices[0], slices[1], slices[2]]
+
+            if pad_if_needed:
+                img_crop = self._pad_to_roi_size(img_crop, roi_size)
+                lbl_crop = self._pad_to_roi_size(lbl_crop, roi_size)
+
+            cropped_images.append(img_crop)
+            cropped_labels.append(lbl_crop)
+
+        batch["image"] = torch.cat(cropped_images, dim=0)
+        batch["label"] = torch.cat(cropped_labels, dim=0)
+        return batch
 
     def process_batch(self, batch, metrics: MetricTracker):
         """
@@ -79,6 +166,8 @@ class Trainer(BaseTrainer):
         """
         batch = self.move_batch_to_device(batch)
         batch = self.transform_batch(batch)  # transform batch on device -- faster
+        if (not self.is_train) and str(getattr(self, "current_eval_mode", "full")).lower() == "quick":
+            batch = self._prepare_quick_validation_batch(batch)
 
         metric_funcs = self.metrics["inference"]
         if self.is_train:
