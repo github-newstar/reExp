@@ -83,13 +83,13 @@ trainer:
     always_eval_epoch1: true
     phases:
       - max_epoch_ratio: 0.5
-        interval: 10
-        mode: quick
-      - max_epoch_ratio: 0.8
         interval: 5
         mode: quick
+      - max_epoch_ratio: 0.8
+        interval: 3
+        mode: quick
       - max_epoch_ratio: 1.0
-        interval: 1
+        interval: 2
         mode: quick
     full_eval:
       enabled: false
