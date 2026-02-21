@@ -1,9 +1,9 @@
 defaults:
-  - lgmamba_lightfsde_cached_ep300_policy
+  - lgmamba_lightfsde_bottleneck_no_eca_cached_ep300_policy
   - _self_
 
 writer:
-  run_name: lgm_aug_bs6_ep100_ultrafast_q2
+  run_name: lgm_bottleneck_no_eca_ep100_ultrafast_3_2_lastfull
 
 datasets:
   train:
@@ -21,6 +21,9 @@ trainer:
     default_mode: quick
     always_eval_epoch1: true
     phases:
+      - max_epoch_ratio: 0.5
+        interval: 3
+        mode: quick
       - max_epoch_ratio: 1.0
         interval: 2
         mode: quick
