@@ -690,3 +690,43 @@ class LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet(
         c1, c2, _, _ = feature_channels
         self.dec2 = DIDCBlock(c2 + c2, c2, use_channel_shuffle=False)
         self.dec1 = DIDCBlock(c1 + c1, c1, use_channel_shuffle=False)
+
+
+class LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaDec3NoECANet(
+    LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet
+):
+    """
+    Variant:
+    - shallow plain encoder (no ECA in enc1/enc2)
+    - dec1/dec2 remove ECA
+    - dec3 remove ECA (skip fusion in stage 3)
+    - bottleneck = ECA -> Mamba -> ECA -> Mamba
+    - enc3 keeps ECA (use_channel_shuffle_deep)
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        _, _, c3, _ = feature_channels
+        self.dec3 = DIDCBlock(c3 + c3, c3, use_channel_shuffle=False)

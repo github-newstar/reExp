@@ -615,6 +615,32 @@ class BaseTrainer:
                     candidate_result["metrics"][f"{part}_{name}"] = float(value)
             summary["full_eval_results"].append(candidate_result)
 
+        ranked_full = []
+        for result in summary["full_eval_results"]:
+            full_score = result["metrics"].get(metric_key)
+            if full_score is None:
+                continue
+            ranked_full.append((float(full_score), result))
+
+        ranked_full.sort(reverse=ranking_mode == "max", key=lambda item: item[0])
+        if ranked_full:
+            self.logger.info("Post-training full eval ranking by %s:", metric_key)
+            for rank, (score, result) in enumerate(ranked_full, start=1):
+                self.logger.info(
+                    "  #%d epoch=%d full=%s=%.6f quick=%.6f checkpoint=%s",
+                    rank,
+                    int(result["epoch"]),
+                    metric_key,
+                    float(score),
+                    float(result.get("quick_score", float("nan"))),
+                    result.get("checkpoint", ""),
+                )
+        else:
+            self.logger.warning(
+                "Post-training full eval ranking skipped: metric %s missing in results.",
+                metric_key,
+            )
+
         summary_path = self.checkpoint_dir / str(
             cfg.get("save_summary_path", "post_full_eval_summary.json")
         )
