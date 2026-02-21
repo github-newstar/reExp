@@ -14,7 +14,7 @@ model:
   use_channel_shuffle_deep: true
 
 writer:
-  run_name: lgm_shallow_skip12_no_eca_dwconv_mamba_eca_mamba_eca_ep100_ultrafast_3_2_lastfull
+  run_name: lgm_shallow_skip12_no_eca_dwconv_mamba_eca_mamba_eca_ep100_ultrafast_3_2_lastfull_v1_0222
 
 datasets:
   train:
