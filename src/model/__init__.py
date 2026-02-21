@@ -1,6 +1,7 @@
 from src.model.baseline_model import BaselineModel
 from src.model.lgmamba_fsde import (
     LGMambaFSDENet,
+    LGMambaLightFSDEBottleneckNoECANet,
     LGMambaLightFSDENet,
     LGMambaLightFSDEPreECANet,
     LGMambaLightFSDEPrePostECANet,
@@ -18,6 +19,7 @@ from src.model.unet3d import UNet3D
 __all__ = [
     "BaselineModel",
     "LGMambaFSDENet",
+    "LGMambaLightFSDEBottleneckNoECANet",
     "LGMambaLightFSDENet",
     "LGMambaLightFSDEPreECANet",
     "LGMambaLightFSDEPrePostECANet",

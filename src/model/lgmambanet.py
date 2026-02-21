@@ -175,6 +175,32 @@ class GTSMambaBottleneckPreECA(GTSMambaBottleneck):
         return out + residual
 
 
+class GTSMambaBottleneckNoECA(GTSMambaBottleneck):
+    """
+    No-ECA variant of GTS-Mamba bottleneck.
+
+    Keep tri-axis Mamba and fusion unchanged, while removing channel attention
+    around bottleneck (no pre-ECA, no post-ECA).
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        self.channel_interaction = nn.Identity()
+
+
 class GTSMambaBottleneckPrePostECA(GTSMambaBottleneck):
     """
     Pre+Post-ECA variant of GTS-Mamba bottleneck.
