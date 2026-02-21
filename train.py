@@ -1,5 +1,7 @@
 import warnings
 import logging
+import re
+from pathlib import Path
 
 import hydra
 import torch
@@ -21,6 +23,7 @@ from src.logger import NullWriter
 from src.trainer import Trainer
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
 from src.utils.monai_compat import patch_monai_numpy_dtype_compat
+from src.utils.io_utils import ROOT_PATH
 from src.utils.distributed import (
     barrier,
     cleanup_distributed,
@@ -28,6 +31,57 @@ from src.utils.distributed import (
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
+
+
+def _checkpoint_epoch_key(path: Path) -> int:
+    match = re.search(r"checkpoint-epoch(\d+)\.pth$", path.name)
+    if match is None:
+        return -1
+    return int(match.group(1))
+
+
+def _find_auto_resume_checkpoint(save_dir: Path) -> tuple[str | None, str | None]:
+    """
+    Prefer model_best for continuity-by-best; fallback to latest epoch checkpoint.
+    """
+    best_path = save_dir / "model_best.pth"
+    if best_path.exists():
+        return best_path.name, "model_best"
+
+    epoch_ckpts = sorted(
+        save_dir.glob("checkpoint-epoch*.pth"),
+        key=_checkpoint_epoch_key,
+    )
+    if len(epoch_ckpts) > 0:
+        return epoch_ckpts[-1].name, "latest_epoch"
+    return None, None
+
+
+def _maybe_enable_auto_resume(config, is_main_process: bool) -> None:
+    if config.trainer.get("resume_from") is not None:
+        return
+    if not bool(config.trainer.get("auto_resume", True)):
+        return
+
+    save_dir = ROOT_PATH / config.trainer.save_dir / config.writer.run_name
+    if not save_dir.exists():
+        return
+
+    resume_from, source = _find_auto_resume_checkpoint(save_dir)
+    if resume_from is None:
+        return
+
+    OmegaConf.set_struct(config, False)
+    config.trainer.resume_from = resume_from
+    # Avoid deleting existing experiment directory when resuming.
+    config.trainer.override = False
+    OmegaConf.set_struct(config, True)
+
+    if is_main_process:
+        print(
+            f"Auto-resume enabled: found {source} checkpoint '{resume_from}' "
+            f"under '{save_dir}'."
+        )
 
 
 def _setup_worker_logger(rank):
@@ -136,6 +190,7 @@ def main(config):
     world_size = int(ddp_state["world_size"])
     is_main = rank == 0
     device = ddp_state["device"]
+    _maybe_enable_auto_resume(config=config, is_main_process=is_main)
 
     # Apply MONAI dtype compatibility patch early, before transforms are instantiated.
     patch_monai_numpy_dtype_compat()
