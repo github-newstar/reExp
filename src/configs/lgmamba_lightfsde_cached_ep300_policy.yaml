@@ -67,6 +67,7 @@ trainer:
     end_factor: 1.0
   amp: true
   amp_dtype: bf16
+  max_grad_norm: 3.0
   et_threshold_search:
     enabled: false
     parts: ["val"]

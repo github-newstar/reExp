@@ -4,8 +4,10 @@ from torch import nn
 
 from src.model.lgmambanet import (
     GTSMambaBottleneck,
+    GTSMambaBottleneckDWConvMambaECAMambaECA,
     GTSMambaBottleneckDWConvMambaDWConvMamba,
     GTSMambaBottleneckECAMambaECAMamba,
+    GTSMambaBottleneckMambaECAMambaECA,
     GTSMambaBottleneckNoECA,
     GTSMambaBottleneckPreECA,
     GTSMambaBottleneckPrePostECA,
@@ -770,6 +772,96 @@ class LGMambaLightFSDEShallowSkip12NoECA_DWConvMambaDWConvMambaNet(
         )
         c4 = int(feature_channels[3])
         self.bottleneck = GTSMambaBottleneckDWConvMambaDWConvMamba(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEShallowSkip12NoECA_MambaECAMambaECANet(
+    LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet
+):
+    """
+    Variant:
+    - shallow plain encoder (no ECA in enc1/enc2)
+    - dec1/dec2 remove ECA
+    - enc3/dec3 keep ECA
+    - bottleneck = Mamba -> ECA -> Mamba -> ECA
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckMambaECAMambaECA(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEShallowSkip12NoECA_DWConvMambaECAMambaECANet(
+    LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet
+):
+    """
+    Variant:
+    - shallow plain encoder (no ECA in enc1/enc2)
+    - dec1/dec2 remove ECA
+    - enc3/dec3 keep ECA
+    - bottleneck = DWConv3D -> Mamba -> ECA -> Mamba -> ECA
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckDWConvMambaECAMambaECA(
             channels=c4,
             mamba_state=mamba_state,
             mamba_conv=mamba_conv,

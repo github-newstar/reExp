@@ -624,17 +624,39 @@ class BaseTrainer:
 
         ranked_full.sort(reverse=ranking_mode == "max", key=lambda item: item[0])
         if ranked_full:
-            self.logger.info("Post-training full eval ranking by %s:", metric_key)
-            for rank, (score, result) in enumerate(ranked_full, start=1):
+            report_best_only = bool(cfg.get("report_best_only", False))
+            best_score, best_result = ranked_full[0]
+            summary["best_full_eval"] = {
+                "epoch": int(best_result["epoch"]),
+                "score": float(best_score),
+                "metric": metric_key,
+                "checkpoint": best_result.get("checkpoint", ""),
+                "metrics": dict(best_result.get("metrics", {})),
+            }
+            if self.writer is not None:
+                self.writer.add_scalar(f"post_full_eval_best/{metric_key}", best_score)
+
+            if report_best_only:
                 self.logger.info(
-                    "  #%d epoch=%d full=%s=%.6f quick=%.6f checkpoint=%s",
-                    rank,
-                    int(result["epoch"]),
+                    "Post-training full eval best: epoch=%d %s=%.6f quick=%.6f checkpoint=%s",
+                    int(best_result["epoch"]),
                     metric_key,
-                    float(score),
-                    float(result.get("quick_score", float("nan"))),
-                    result.get("checkpoint", ""),
+                    float(best_score),
+                    float(best_result.get("quick_score", float("nan"))),
+                    best_result.get("checkpoint", ""),
                 )
+            else:
+                self.logger.info("Post-training full eval ranking by %s:", metric_key)
+                for rank, (score, result) in enumerate(ranked_full, start=1):
+                    self.logger.info(
+                        "  #%d epoch=%d full=%s=%.6f quick=%.6f checkpoint=%s",
+                        rank,
+                        int(result["epoch"]),
+                        metric_key,
+                        float(score),
+                        float(result.get("quick_score", float("nan"))),
+                        result.get("checkpoint", ""),
+                    )
         else:
             self.logger.warning(
                 "Post-training full eval ranking skipped: metric %s missing in results.",

@@ -422,6 +422,115 @@ class GTSMambaBottleneckECAMambaECAMamba(GTSMambaBottleneck):
         return out + residual
 
 
+class GTSMambaBottleneckMambaECAMambaECA(GTSMambaBottleneck):
+    """
+    Bottleneck sequence: tri-axis Mamba -> ECA -> tri-axis Mamba -> ECA.
+
+    The second tri-axis Mamba pass uses an independent parameter set.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        from mamba_ssm import Mamba
+
+        grouped_channels = (
+            self.group_proj.out_channels
+            if isinstance(self.group_proj, nn.Conv3d)
+            else channels
+        )
+        branch_channels = grouped_channels // 3
+
+        self.eca1 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+        self.eca2 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+
+        # Independent second tri-axis Mamba set.
+        self.norm1_b = nn.LayerNorm(branch_channels)
+        self.norm2_b = nn.LayerNorm(branch_channels)
+        self.norm3_b = nn.LayerNorm(branch_channels)
+        self.mamba1_b = Mamba(
+            d_model=branch_channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
+        self.mamba2_b = Mamba(
+            d_model=branch_channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
+        self.mamba3_b = Mamba(
+            d_model=branch_channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
+        self.channel_interaction = nn.Identity()
+
+    def _run_tri_axis_mamba(self, grouped: torch.Tensor) -> torch.Tensor:
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice(x1)
+        out2 = self._branch_depth_scan(x2)
+        out3 = self._branch_global(x3)
+        return torch.cat([out1, out2, out3], dim=1)
+
+    def _branch_intra_slice_b(self, x1: torch.Tensor) -> torch.Tensor:
+        b, cg, d, h, w = x1.shape
+        seq = x1.permute(0, 2, 3, 4, 1).reshape(b * d, h * w, cg)
+        seq = self.mamba1_b(self.norm1_b(seq))
+        return seq.view(b, d, h, w, cg).permute(0, 4, 1, 2, 3).contiguous()
+
+    def _branch_depth_scan_b(self, x2: torch.Tensor) -> torch.Tensor:
+        b, cg, d, h, w = x2.shape
+        seq = x2.permute(0, 3, 4, 2, 1).reshape(b * h * w, d, cg)
+        seq = self.mamba2_b(self.norm2_b(seq))
+        return seq.view(b, h, w, d, cg).permute(0, 4, 3, 1, 2).contiguous()
+
+    def _branch_global_b(self, x3: torch.Tensor) -> torch.Tensor:
+        b, cg, d, h, w = x3.shape
+        seq = x3.permute(0, 2, 3, 4, 1).reshape(b, d * h * w, cg)
+        seq = self.mamba3_b(self.norm3_b(seq))
+        return seq.view(b, d, h, w, cg).permute(0, 4, 1, 2, 3).contiguous()
+
+    def _run_tri_axis_mamba_b(self, grouped: torch.Tensor) -> torch.Tensor:
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice_b(x1)
+        out2 = self._branch_depth_scan_b(x2)
+        out3 = self._branch_global_b(x3)
+        return torch.cat([out1, out2, out3], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        grouped = self._run_tri_axis_mamba(grouped)
+        grouped = self.eca1(grouped)
+        grouped = self._run_tri_axis_mamba_b(grouped)
+        grouped = self.eca2(grouped)
+        out = self.fuse(grouped)
+        return out + residual
+
+
 class GTSMambaBottleneckDWConvMambaDWConvMamba(GTSMambaBottleneck):
     """
     Bottleneck sequence: DW-Conv3D -> tri-axis Mamba -> DW-Conv3D -> tri-axis Mamba.
@@ -487,6 +596,121 @@ class GTSMambaBottleneckDWConvMambaDWConvMamba(GTSMambaBottleneck):
         grouped = self._run_tri_axis_mamba(grouped)
         grouped = self.dw2(grouped)
         grouped = self._run_tri_axis_mamba(grouped)
+        out = self.fuse(grouped)
+        return out + residual
+
+
+class GTSMambaBottleneckDWConvMambaECAMambaECA(GTSMambaBottleneck):
+    """
+    Bottleneck sequence: DW-Conv3D -> tri-axis Mamba -> ECA -> tri-axis Mamba -> ECA.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        from mamba_ssm import Mamba
+
+        grouped_channels = (
+            self.group_proj.out_channels
+            if isinstance(self.group_proj, nn.Conv3d)
+            else channels
+        )
+        branch_channels = grouped_channels // 3
+
+        self.dw = nn.Sequential(
+            nn.Conv3d(
+                grouped_channels,
+                grouped_channels,
+                kernel_size=3,
+                padding=1,
+                groups=grouped_channels,
+                bias=False,
+            ),
+            nn.InstanceNorm3d(grouped_channels),
+            nn.SiLU(inplace=True),
+        )
+
+        self.eca1 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+        self.eca2 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+
+        # Independent second tri-axis Mamba set.
+        self.norm1_b = nn.LayerNorm(branch_channels)
+        self.norm2_b = nn.LayerNorm(branch_channels)
+        self.norm3_b = nn.LayerNorm(branch_channels)
+        self.mamba1_b = Mamba(
+            d_model=branch_channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
+        self.mamba2_b = Mamba(
+            d_model=branch_channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
+        self.mamba3_b = Mamba(
+            d_model=branch_channels,
+            d_state=mamba_state,
+            d_conv=mamba_conv,
+            expand=mamba_expand,
+        )
+
+        self.channel_interaction = nn.Identity()
+
+    def _branch_intra_slice_b(self, x1: torch.Tensor) -> torch.Tensor:
+        b, cg, d, h, w = x1.shape
+        seq = x1.permute(0, 2, 3, 4, 1).reshape(b * d, h * w, cg)
+        seq = self.mamba1_b(self.norm1_b(seq))
+        return seq.view(b, d, h, w, cg).permute(0, 4, 1, 2, 3).contiguous()
+
+    def _branch_depth_scan_b(self, x2: torch.Tensor) -> torch.Tensor:
+        b, cg, d, h, w = x2.shape
+        seq = x2.permute(0, 3, 4, 2, 1).reshape(b * h * w, d, cg)
+        seq = self.mamba2_b(self.norm2_b(seq))
+        return seq.view(b, h, w, d, cg).permute(0, 4, 3, 1, 2).contiguous()
+
+    def _branch_global_b(self, x3: torch.Tensor) -> torch.Tensor:
+        b, cg, d, h, w = x3.shape
+        seq = x3.permute(0, 2, 3, 4, 1).reshape(b, d * h * w, cg)
+        seq = self.mamba3_b(self.norm3_b(seq))
+        return seq.view(b, d, h, w, cg).permute(0, 4, 1, 2, 3).contiguous()
+
+    def _run_tri_axis_mamba_b(self, grouped: torch.Tensor) -> torch.Tensor:
+        x1, x2, x3 = torch.chunk(grouped, chunks=3, dim=1)
+        out1 = self._branch_intra_slice_b(x1)
+        out2 = self._branch_depth_scan_b(x2)
+        out3 = self._branch_global_b(x3)
+        return torch.cat([out1, out2, out3], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        grouped = self.dw(grouped)
+        grouped = self._run_tri_axis_mamba(grouped)
+        grouped = self.eca1(grouped)
+        grouped = self._run_tri_axis_mamba_b(grouped)
+        grouped = self.eca2(grouped)
         out = self.fuse(grouped)
         return out + residual
 
