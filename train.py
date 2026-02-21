@@ -5,6 +5,7 @@ import hydra
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+from monai.data.meta_tensor import set_track_meta
 
 from src.datasets.data_utils import get_dataloaders
 from src.logger import NullWriter
@@ -125,6 +126,10 @@ def main(config):
     world_size = int(ddp_state["world_size"])
     is_main = rank == 0
     device = ddp_state["device"]
+
+    # Hard-disable MONAI MetaTensor tracking to avoid known numpy/monai
+    # recursion/type-conversion issues in transform meta pipelines.
+    set_track_meta(False)
     ddp_cfg = config.trainer.get("ddp", {})
     distributed_eval = bool(ddp_cfg.get("distributed_eval", True))
 

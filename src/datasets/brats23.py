@@ -452,6 +452,15 @@ class BraTS23CachedVectorDataset(Dataset):
         et = label == 3
         return torch.stack([tc, wt, et], dim=0).float()
 
+    @staticmethod
+    def _to_plain_tensor(tensor_like):
+        """
+        Convert potential MetaTensor/tensor-like inputs to plain torch.Tensor.
+        """
+        if hasattr(tensor_like, "as_tensor"):
+            tensor_like = tensor_like.as_tensor()
+        return torch.as_tensor(tensor_like)
+
     def __getitem__(self, ind):
         cached = None
         if self._memory_cache is not None:
@@ -475,8 +484,8 @@ class BraTS23CachedVectorDataset(Dataset):
         vector_path = Path(record["vector_path"]).expanduser().resolve()
         sample = self._load_payload(vector_path)
 
-        image = torch.as_tensor(sample["image"])
-        label = torch.as_tensor(sample["label"])
+        image = self._to_plain_tensor(sample["image"])
+        label = self._to_plain_tensor(sample["label"])
 
         if label.ndim == 3:
             label = label.unsqueeze(0)
@@ -497,8 +506,8 @@ class BraTS23CachedVectorDataset(Dataset):
         if self.instance_transforms is not None:
             sample = self.instance_transforms(sample)
 
-        sample["image"] = torch.as_tensor(sample["image"]).float()
-        final_label = torch.as_tensor(sample["label"])
+        sample["image"] = self._to_plain_tensor(sample["image"]).float()
+        final_label = self._to_plain_tensor(sample["label"])
         
         if final_label.ndim == 3 or (final_label.ndim == 4 and final_label.shape[0] == 1):
             final_label = self._to_three_channel_label(final_label)

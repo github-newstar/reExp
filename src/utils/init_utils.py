@@ -23,6 +23,16 @@ def set_worker_seed(worker_id):
     Args:
         worker_id (int): id of the worker.
     """
+    # Ensure every DataLoader worker keeps MONAI MetaTensor tracking disabled.
+    # Some multiprocessing start methods may not inherit this flag from parent.
+    try:
+        from monai.data.meta_tensor import set_track_meta
+
+        set_track_meta(False)
+    except Exception:
+        # Training should not fail due to worker-side meta tracking setup.
+        pass
+
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
