@@ -595,7 +595,7 @@ class BaseTrainer:
             "Starting post-training full evaluation on top-%d checkpoints.", len(selected)
         )
         for epoch, quick_score, checkpoint_path in selected:
-            checkpoint = torch.load(str(checkpoint_path), self.device)
+            checkpoint = self._load_checkpoint_compat(str(checkpoint_path))
             model_ref.load_state_dict(checkpoint["state_dict"])
             candidate_result = {
                 "epoch": int(epoch),
@@ -1111,7 +1111,7 @@ class BaseTrainer:
         """
         resume_path = str(resume_path)
         self.logger.info(f"Loading checkpoint: {resume_path} ...")
-        checkpoint = torch.load(resume_path, self.device)
+        checkpoint = self._load_checkpoint_compat(resume_path)
         self.start_epoch = checkpoint["epoch"] + 1
         self.mnt_best = checkpoint["monitor_best"]
 
@@ -1158,12 +1158,29 @@ class BaseTrainer:
             self.logger.info(f"Loading model weights from: {pretrained_path} ...")
         else:
             print(f"Loading model weights from: {pretrained_path} ...")
-        checkpoint = torch.load(pretrained_path, self.device)
+        checkpoint = self._load_checkpoint_compat(pretrained_path)
 
         if checkpoint.get("state_dict") is not None:
             self._model_for_state_dict().load_state_dict(checkpoint["state_dict"])
         else:
             self._model_for_state_dict().load_state_dict(checkpoint)
+
+    def _load_checkpoint_compat(self, checkpoint_path):
+        """
+        Load checkpoint across PyTorch versions.
+
+        PyTorch 2.6 changed torch.load default `weights_only=True`, which may
+        reject full training checkpoints containing config objects.
+        """
+        try:
+            return torch.load(
+                checkpoint_path,
+                map_location=self.device,
+                weights_only=False,
+            )
+        except TypeError:
+            # Older PyTorch versions may not accept weights_only argument.
+            return torch.load(checkpoint_path, map_location=self.device)
 
     def _model_for_state_dict(self):
         """
