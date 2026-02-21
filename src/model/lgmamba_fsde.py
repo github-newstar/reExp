@@ -292,6 +292,46 @@ class LGMambaLightFSDENoShuffleNet(LGMambaLightFSDENet):
         )
 
 
+class LGMambaLightFSDEStage123NoECAPostECANet(LGMambaLightFSDENet):
+    """
+    Remove ECA in encoder/decoder stages 1/2/3, while keeping bottleneck as
+    default post-ECA GTS-Mamba.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        # Keep bottleneck post-ECA behavior (use_channel_shuffle=True), then
+        # explicitly disable channel interaction in enc/dec stage 1/2/3 only.
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle=True,
+            dynamic_eval=dynamic_eval,
+        )
+        c1, c2, c3, _ = feature_channels
+        self.enc1 = DIDCBlock(in_channels, c1, use_channel_shuffle=False)
+        self.enc2 = DIDCBlock(c2, c2, use_channel_shuffle=False)
+        self.enc3 = DIDCBlock(c3, c3, use_channel_shuffle=False)
+        self.dec3 = DIDCBlock(c3 + c3, c3, use_channel_shuffle=False)
+        self.dec2 = DIDCBlock(c2 + c2, c2, use_channel_shuffle=False)
+        self.dec1 = DIDCBlock(c1 + c1, c1, use_channel_shuffle=False)
+
+
 class LGMambaLightFSDEBottleneckNoECANet(LGMambaLightFSDENet):
     """
     LGMamba LightFSDE variant where only bottleneck ECA is removed.
