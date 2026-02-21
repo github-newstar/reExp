@@ -5,7 +5,16 @@ import hydra
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
-from monai.data.meta_tensor import set_track_meta
+
+try:
+    # MONAI compatibility: set_track_meta location differs by version.
+    from monai.data.meta_obj import set_track_meta
+except Exception:  # pragma: no cover - fallback for older/newer MONAI variants
+    try:
+        from monai.data.meta_tensor import set_track_meta
+    except Exception:
+        def set_track_meta(_enabled):  # type: ignore[no-redef]
+            return None
 
 from src.datasets.data_utils import get_dataloaders
 from src.logger import NullWriter
