@@ -1,0 +1,26 @@
+defaults:
+  - lgmamba_lightfsde_cached_ep300_policy
+  - _self_
+
+writer:
+  run_name: lgm_aug_bs6_ep100_ultrafast_q2
+
+datasets:
+  train:
+    usage_ratio: 1.0
+  val:
+    usage_ratio: 1.0
+
+trainer:
+  n_epochs: 100
+  warmup:
+    enabled: true
+    epochs: 10
+  validation_policy:
+    enabled: true
+    default_mode: quick
+    always_eval_epoch1: true
+    phases:
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: quick
