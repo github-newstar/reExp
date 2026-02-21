@@ -1,6 +1,6 @@
-import pandas as pd
 import torch
 import torch.distributed as dist
+from collections import OrderedDict
 
 
 class MetricTracker:
@@ -18,10 +18,9 @@ class MetricTracker:
                 from each batch.
         """
         self.writer = writer
-        self._data = pd.DataFrame(
-            index=keys,
-            data={"total": 0.0, "counts": 0.0, "average": 0.0},
-            dtype=float,
+        self._keys = tuple(keys)
+        self._data = OrderedDict(
+            (k, {"total": 0.0, "counts": 0.0, "average": 0.0}) for k in self._keys
         )
         self.reset()
 
@@ -29,9 +28,10 @@ class MetricTracker:
         """
         Reset all metrics after epoch end.
         """
-        self._data.loc[:, "total"] = 0.0
-        self._data.loc[:, "counts"] = 0.0
-        self._data.loc[:, "average"] = 0.0
+        for key in self._keys:
+            self._data[key]["total"] = 0.0
+            self._data[key]["counts"] = 0.0
+            self._data[key]["average"] = 0.0
 
     def update(self, key, value, n=1):
         """
@@ -44,9 +44,13 @@ class MetricTracker:
         """
         # if self.writer is not None:
         #     self.writer.add_scalar(key, value)
-        self._data.loc[key, "total"] += value * n
-        self._data.loc[key, "counts"] += n
-        self._data.loc[key, "average"] = self._data.total[key] / self._data.counts[key]
+        if key not in self._data:
+            raise KeyError(f"Unknown metric key: {key}")
+        total = self._data[key]["total"] + float(value) * float(n)
+        counts = self._data[key]["counts"] + float(n)
+        self._data[key]["total"] = total
+        self._data[key]["counts"] = counts
+        self._data[key]["average"] = total / counts if counts > 0.0 else 0.0
 
     def avg(self, key):
         """
@@ -57,7 +61,7 @@ class MetricTracker:
         Returns:
             average_value (float): average value for the metric.
         """
-        return self._data.average[key]
+        return self._data[key]["average"]
 
     def result(self):
         """
@@ -67,7 +71,7 @@ class MetricTracker:
             average_metrics (dict): dict, containing average metrics
                 for each metric name.
         """
-        return dict(self._data.average)
+        return {k: self._data[k]["average"] for k in self._keys}
 
     def keys(self):
         """
@@ -76,7 +80,7 @@ class MetricTracker:
         Returns:
             metric_keys (Index): all metric names in the table.
         """
-        return self._data.total.keys()
+        return self._keys
 
     def sync_between_processes(self, device="cpu"):
         """
@@ -86,12 +90,12 @@ class MetricTracker:
             return
 
         totals = torch.tensor(
-            self._data["total"].to_list(),
+            [self._data[k]["total"] for k in self._keys],
             dtype=torch.float64,
             device=device,
         )
         counts = torch.tensor(
-            self._data["counts"].to_list(),
+            [self._data[k]["counts"] for k in self._keys],
             dtype=torch.float64,
             device=device,
         )
@@ -100,13 +104,9 @@ class MetricTracker:
 
         totals_cpu = totals.cpu().tolist()
         counts_cpu = counts.cpu().tolist()
-        averages = []
-        for total, count in zip(totals_cpu, counts_cpu):
-            if count > 0.0:
-                averages.append(total / count)
-            else:
-                averages.append(0.0)
-
-        self._data.loc[:, "total"] = totals_cpu
-        self._data.loc[:, "counts"] = counts_cpu
-        self._data.loc[:, "average"] = averages
+        for idx, key in enumerate(self._keys):
+            total = float(totals_cpu[idx])
+            count = float(counts_cpu[idx])
+            self._data[key]["total"] = total
+            self._data[key]["counts"] = count
+            self._data[key]["average"] = total / count if count > 0.0 else 0.0
