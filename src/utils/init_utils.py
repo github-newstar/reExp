@@ -23,6 +23,14 @@ def set_worker_seed(worker_id):
     Args:
         worker_id (int): id of the worker.
     """
+    # Ensure MONAI dtype conversion patch is active in worker process too.
+    try:
+        from src.utils.monai_compat import patch_monai_numpy_dtype_compat
+
+        patch_monai_numpy_dtype_compat()
+    except Exception:
+        pass
+
     # Ensure every DataLoader worker keeps MONAI MetaTensor tracking disabled.
     # Some multiprocessing start methods may not inherit this flag from parent.
     try:

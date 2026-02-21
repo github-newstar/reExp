@@ -20,6 +20,7 @@ from src.datasets.data_utils import get_dataloaders
 from src.logger import NullWriter
 from src.trainer import Trainer
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
+from src.utils.monai_compat import patch_monai_numpy_dtype_compat
 from src.utils.distributed import (
     barrier,
     cleanup_distributed,
@@ -135,6 +136,9 @@ def main(config):
     world_size = int(ddp_state["world_size"])
     is_main = rank == 0
     device = ddp_state["device"]
+
+    # Apply MONAI dtype compatibility patch early, before transforms are instantiated.
+    patch_monai_numpy_dtype_compat()
 
     # Hard-disable MONAI MetaTensor tracking to avoid known numpy/monai
     # recursion/type-conversion issues in transform meta pipelines.
