@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.model.lgmambanet import GTSMambaBottleneck
+from src.model.lgmambanet import GTSMambaBottleneck, GTSMambaBottleneckPreECA
 from src.model.lmambanet import DIDCBlock
 
 
@@ -150,6 +150,8 @@ class LGMambaLightFSDENet(nn.Module):
         mamba_expand: int = 2,
         deep_supervision: bool = True,
         use_channel_shuffle: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
     ):
         super().__init__()
         c1, c2, c3, c4 = feature_channels
@@ -313,3 +315,46 @@ class LGMambaLightFSDEShallowPlainNet(LGMambaLightFSDENet):
         # Replace shallow DIDC blocks with plain depthwise residual blocks.
         self.enc1 = ShallowDWConvResidualBlock(in_channels, c1)
         self.enc2 = ShallowDWConvResidualBlock(c2, c2)
+
+
+class LGMambaLightFSDEPreECANet(LGMambaLightFSDENet):
+    """
+    LGMamba LightFSDE variant with only one change:
+    ECA is moved to BEFORE the tri-axis Mamba bottleneck branches.
+
+    All other encoder/decoder/skip-FSDE components remain identical to
+    LGMambaLightFSDENet for a clean ablation.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle=use_channel_shuffle,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckPreECA(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )

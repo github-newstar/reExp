@@ -2,6 +2,7 @@ from src.model.baseline_model import BaselineModel
 from src.model.lgmamba_fsde import (
     LGMambaFSDENet,
     LGMambaLightFSDENet,
+    LGMambaLightFSDEPreECANet,
     LGMambaLightFSDENoShuffleNet,
     LGMambaLightFSDEShallowPlainNet,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "BaselineModel",
     "LGMambaFSDENet",
     "LGMambaLightFSDENet",
+    "LGMambaLightFSDEPreECANet",
     "LGMambaLightFSDENoShuffleNet",
     "LGMambaLightFSDEShallowPlainNet",
     "LGMambaNet",
