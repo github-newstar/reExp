@@ -275,6 +275,8 @@ class LGMambaLightFSDENoShuffleNet(LGMambaLightFSDENet):
         mamba_conv: int = 4,
         mamba_expand: int = 2,
         deep_supervision: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
     ):
         super().__init__(
             in_channels=in_channels,
@@ -285,6 +287,7 @@ class LGMambaLightFSDENoShuffleNet(LGMambaLightFSDENet):
             mamba_expand=mamba_expand,
             deep_supervision=deep_supervision,
             use_channel_shuffle=False,
+            dynamic_eval=dynamic_eval,
         )
 
 
@@ -348,6 +351,8 @@ class LGMambaLightFSDEShallowPlainNet(LGMambaLightFSDENet):
         mamba_expand: int = 2,
         deep_supervision: bool = True,
         use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
     ):
         super().__init__(
             in_channels=in_channels,
@@ -358,6 +363,7 @@ class LGMambaLightFSDEShallowPlainNet(LGMambaLightFSDENet):
             mamba_expand=mamba_expand,
             deep_supervision=deep_supervision,
             use_channel_shuffle=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
         )
         c1, c2, _, _ = feature_channels
 
