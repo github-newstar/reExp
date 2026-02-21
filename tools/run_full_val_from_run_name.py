@@ -2,11 +2,17 @@
 import argparse
 import logging
 import re
+import sys
 from pathlib import Path
 
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+
+# Ensure "src" package is importable no matter where the script is executed from.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.data_utils import get_dataloaders
 from src.logger import NullWriter
@@ -55,6 +61,17 @@ def _resolve_device(config) -> str:
     if configured == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return configured
+
+
+def _load_checkpoint_compat(checkpoint_path: Path, device: str):
+    try:
+        return torch.load(
+            str(checkpoint_path),
+            map_location=device,
+            weights_only=False,
+        )
+    except TypeError:
+        return torch.load(str(checkpoint_path), map_location=device)
 
 
 def main():
@@ -149,7 +166,7 @@ def main():
         is_distributed=False,
     )
 
-    checkpoint = torch.load(str(checkpoint_path), map_location=device)
+    checkpoint = _load_checkpoint_compat(checkpoint_path=checkpoint_path, device=device)
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state_dict = checkpoint["state_dict"]
     else:
