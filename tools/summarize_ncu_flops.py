@@ -39,36 +39,88 @@ def _parse_float(text: str) -> float | None:
     return v
 
 
+def _pick_metric_indices(header: list[str]) -> tuple[int | None, int | None]:
+    norm = [h.strip().lower() for h in header]
+    name_idx = None
+    value_idx = None
+
+    # Prefer explicit NCU columns first.
+    for i, h in enumerate(norm):
+        if h == "metric name":
+            name_idx = i
+            break
+    for i, h in enumerate(norm):
+        if h == "metric value":
+            value_idx = i
+            break
+
+    # Fallback for variant exports.
+    if name_idx is None:
+        for i, h in enumerate(norm):
+            if "metric" in h and "name" in h:
+                name_idx = i
+                break
+    if value_idx is None:
+        for i, h in enumerate(norm):
+            if "metric" in h and "value" in h:
+                value_idx = i
+                break
+
+    return name_idx, value_idx
+
+
 def read_metric_sums(csv_path: Path) -> dict[str, float]:
     sums: dict[str, float] = defaultdict(float)
     metric_name_idx = None
     metric_value_idx = None
 
-    with csv_path.open("r", encoding="utf-8", errors="ignore") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row:
-                continue
-            # Nsight prefixes runtime log lines; skip them.
-            if row[0].startswith("==PROF=="):
-                continue
+    text = csv_path.read_text(encoding="utf-8", errors="ignore")
+    sample = text[:8192]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
 
-            # Header may appear multiple times in the same CSV.
-            if "Metric Name" in row and "Metric Value" in row:
-                metric_name_idx = row.index("Metric Name")
-                metric_value_idx = row.index("Metric Value")
-                continue
+    rows = list(csv.reader(text.splitlines(), dialect=dialect))
+    for row in rows:
+        if not row:
+            continue
+        # Nsight prefixes runtime log lines; skip them.
+        if row[0].startswith("==PROF=="):
+            continue
 
-            if metric_name_idx is None or metric_value_idx is None:
-                continue
-            if len(row) <= max(metric_name_idx, metric_value_idx):
-                continue
+        header_name_idx, header_value_idx = _pick_metric_indices(row)
+        if header_name_idx is not None and header_value_idx is not None:
+            metric_name_idx = header_name_idx
+            metric_value_idx = header_value_idx
+            continue
 
-            metric_name = row[metric_name_idx].strip()
-            metric_value = _parse_float(row[metric_value_idx])
-            if not metric_name or metric_value is None:
+        if metric_name_idx is None or metric_value_idx is None:
+            continue
+        if len(row) <= max(metric_name_idx, metric_value_idx):
+            continue
+
+        metric_name = row[metric_name_idx].strip()
+        metric_value = _parse_float(row[metric_value_idx])
+        if not metric_name or metric_value is None:
+            continue
+        sums[metric_name] += metric_value
+
+    # Some exports may not contain explicit metric columns in raw page.
+    # Fallback: detect "metric,value" two-column style rows.
+    if not sums:
+        metric_like = re.compile(
+            r"^(?:flop_count_|(?:sm|smsp)__sass_thread_inst_executed_op_)"
+        )
+        for row in rows:
+            if len(row) < 2:
                 continue
-            sums[metric_name] += metric_value
+            name = row[0].strip()
+            if not metric_like.match(name):
+                continue
+            value = _parse_float(row[1])
+            if value is not None:
+                sums[name] += value
 
     return dict(sums)
 
@@ -160,4 +212,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
