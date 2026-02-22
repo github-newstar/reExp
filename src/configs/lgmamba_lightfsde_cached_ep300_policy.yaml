@@ -22,6 +22,7 @@ loss_function:
   focal_weight: 1.0
   gamma: 2.0
   alpha: null
+  channel_weights: null
 
 writer:
   mode: online

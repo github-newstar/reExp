@@ -3,6 +3,7 @@ defaults:
   - _self_
 
 loss_function:
+  _delete_: true
   _target_: src.loss.GeneralizedDiceFocalSegLoss
   gdice_weight: 1.0
   gfocal_weight: 1.0
