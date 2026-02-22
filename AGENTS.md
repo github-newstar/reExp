@@ -232,8 +232,18 @@ python train.py -cn=lgmamba_lightfsde_post_eca_cached_ep100_ultrafast
 ```bash
 python train.py -cn=lgmamba_lightfsde_shallow_skip12_no_eca_mamba_eca_mamba_eca_cached_ep100_ultrafast
 ```
+## 12. 参数量、FLOPS 计算
+只测推理 FLOPs
+python "tools/flops_ncu_infer_from_run.py" --run-name "<YOUR_RUN_NAME>"
+只看理论 FLOPs + 参数量
+python "tools/flops_theoretical_from_run.py" --run-name "<YOUR_RUN_NAME>"
+可选（控制 NCU 推理采样强度）
+python3 "tools/flops_ncu_infer_from_run.py" \
+  --run-name "<YOUR_RUN_NAME>" \
+  --warmup 3 \
+  --iters 10
 
-## 12. 依赖与兼容性备注
+## 13. 依赖与兼容性备注
 - `mamba_ssm` 为 L/Mamba 相关模型硬依赖。
 - `train.py` 启动时会：
   - `patch_monai_numpy_dtype_compat()`
