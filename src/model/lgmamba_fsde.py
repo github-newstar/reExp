@@ -16,6 +16,7 @@ from src.model.lgmambanet import (
     GTSMambaBottleneckSpatialPrior,
     GTSMambaBottleneckTriMambaECATriMambaECA,
     GTSMambaBottleneckTriMambaECATriMambaECAShared,
+    GTSMambaBottleneckECAC3TriMambaECAC3TriMamba,
 )
 from src.model.lmambanet import DIDCBlock
 
@@ -1002,6 +1003,50 @@ class LGMambaLightFSDEShallowSkip12NoECA_3TriMambaECA_3TriMambaECASharedNet(
         )
         c4 = int(feature_channels[3])
         self.bottleneck = GTSMambaBottleneckTriMambaECATriMambaECAShared(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaNet(
+    LGMambaLightFSDEShallowSkip12NoECANet
+):
+    """
+    Variant based on 12_noeca:
+    - keep shallow skip12 no-ECA behavior
+    - replace bottleneck with:
+      ECA -> C/3-3TriMamba -> ECA -> C/3-3TriMamba
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckECAC3TriMambaECAC3TriMamba(
             channels=c4,
             mamba_state=mamba_state,
             mamba_conv=mamba_conv,

@@ -1,0 +1,58 @@
+defaults:
+  - lgmamba_lightfsde_cached_ep300_policy
+  - _self_
+
+model:
+  _target_: src.model.LGMambaLightFSDEShallowSkip12NoECA_MambaECAMambaECANet
+  in_channels: 4
+  out_channels: 3
+  feature_channels: [32, 64, 128, 256]
+  mamba_state: 16
+  mamba_conv: 4
+  mamba_expand: 2
+  deep_supervision: true
+  use_channel_shuffle_deep: true
+
+writer:
+  run_name: lgm_shallow_skip12_no_eca_mamba_eca_mamba_eca_ep300_fullval_20_5_2
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 2e-4
+  weight_decay: 1e-5
+
+lr_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${trainer.n_epochs}
+  eta_min: 1e-6
+
+dataloader:
+  batch_size: 6
+
+trainer:
+  n_epochs: 300
+  warmup:
+    enabled: true
+    epochs: 30
+    start_factor: 0.1
+    end_factor: 1.0
+  validation_policy:
+    enabled: true
+    default_mode: full
+    always_eval_epoch1: true
+    phases:
+      - max_epoch_ratio: 0.3333333333333333
+        interval: 20
+        mode: full
+      - max_epoch_ratio: 0.8333333333333334
+        interval: 5
+        mode: full
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: full
+    full_eval:
+      enabled: false
+      interval: 0
+      epochs: []
+    post_training_full_eval:
+      enabled: false

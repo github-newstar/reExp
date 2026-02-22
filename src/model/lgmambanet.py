@@ -1008,6 +1008,75 @@ class GTSMambaBottleneckTriMambaECATriMambaECA(nn.Module):
         return out + residual
 
 
+class GTSMambaBottleneckECAC3TriMambaECAC3TriMamba(nn.Module):
+    """
+    Bottleneck sequence: ECA -> C/3-3TriMamba -> ECA -> C/3-3TriMamba.
+
+    Design intent:
+    - Keep the tri-orient scan pattern (forward / reverse / inter-slice).
+    - Compress channels to C/3 before TriMamba blocks to reduce parameters.
+    - Expand back to C and fuse with residual path.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        self.use_channel_shuffle = bool(use_channel_shuffle)
+
+        tri_channels = max((channels + 2) // 3, 1)
+        self.reduce = nn.Conv3d(channels, tri_channels, kernel_size=1, bias=False)
+
+        self.eca1 = (
+            ECABlock3D(channels=tri_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+        self.eca2 = (
+            ECABlock3D(channels=tri_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+
+        self.tri_mamba1 = TriOrientMamba3D(
+            channels=tri_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            share_mamba=False,
+        )
+        self.tri_mamba2 = TriOrientMamba3D(
+            channels=tri_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            share_mamba=False,
+        )
+
+        self.expand_fuse = nn.Sequential(
+            nn.Conv3d(tri_channels, channels, kernel_size=1, bias=False),
+            nn.InstanceNorm3d(channels),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        x = self.reduce(x)
+        x = self.eca1(x)
+        x = self.tri_mamba1(x)
+        x = self.eca2(x)
+        x = self.tri_mamba2(x)
+        x = self.expand_fuse(x)
+        return x + residual
+
+
 class GTSMambaBottleneckTriMambaECATriMambaECAShared(
     GTSMambaBottleneckTriMambaECATriMambaECA
 ):
