@@ -18,6 +18,7 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -230,6 +231,14 @@ def main() -> None:
     )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=30)
+    parser.add_argument(
+        "--no-torch-profiler",
+        action="store_true",
+        help=(
+            "Disable torch.profiler FLOPs collection. "
+            "Use this when running under Nsight Compute (ncu) to avoid CUPTI conflicts."
+        ),
+    )
     args = parser.parse_args()
 
     if args.device.startswith("cuda") and not torch.cuda.is_available():
@@ -282,7 +291,16 @@ def main() -> None:
     )
 
     fv_flops, fv_msg = try_fvcore_flops(wrapper, x)
-    pr_flops, pr_msg = try_torch_profiler_flops(wrapper, x, args.device)
+
+    ncu_related_env = any(
+        key in os.environ
+        for key in ("NCU_PROFILER_VERSION", "NSIGHT_COMPUTE_MODE", "NV_COMPUTE_PROFILER")
+    )
+    disable_torch_profiler = args.no_torch_profiler or ncu_related_env
+    if disable_torch_profiler:
+        pr_flops, pr_msg = None, "disabled (no-torch-profiler or ncu env detected)"
+    else:
+        pr_flops, pr_msg = try_torch_profiler_flops(wrapper, x, args.device)
 
     print("=" * 80)
     print("Profile Summary")
