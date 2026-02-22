@@ -51,13 +51,54 @@ def _format_shape(shape: Iterable[int]) -> str:
     return "x".join(str(int(v)) for v in shape)
 
 
-def build_model(config_name: str, overrides: list[str]) -> torch.nn.Module:
+def build_model_from_config_name(
+    config_name: str, overrides: list[str]
+) -> tuple[torch.nn.Module, object]:
     with initialize_config_dir(
         version_base=None, config_dir=str(CONFIG_DIR.resolve())
     ):
         cfg = compose(config_name=config_name, overrides=overrides)
     model = instantiate(cfg.model)
-    return model
+    return model, cfg
+
+
+def _checkpoint_epoch_key(path: Path) -> int:
+    name = path.name
+    if not name.startswith("checkpoint-epoch") or not name.endswith(".pth"):
+        return -1
+    epoch_str = name[len("checkpoint-epoch") : -4]
+    return int(epoch_str) if epoch_str.isdigit() else -1
+
+
+def find_best_checkpoint(run_dir: Path) -> Path:
+    for name in ("best_model.pth", "model_best.pth"):
+        p = run_dir / name
+        if p.exists():
+            return p
+    candidates = sorted(run_dir.glob("checkpoint-epoch*.pth"), key=_checkpoint_epoch_key)
+    if not candidates:
+        raise FileNotFoundError(
+            f"No checkpoint found in '{run_dir}'. "
+            "Expected best_model.pth/model_best.pth/checkpoint-epoch*.pth."
+        )
+    return candidates[-1]
+
+
+def build_model_from_run_name(
+    run_name: str,
+    save_root: str,
+    overrides: list[str],
+) -> tuple[torch.nn.Module, object, Path]:
+    run_dir = ROOT / save_root / run_name
+    config_path = run_dir / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Run config not found: {config_path}")
+    cfg = OmegaConf.load(config_path)
+    if overrides:
+        override_cfg = OmegaConf.from_dotlist(overrides)
+        cfg = OmegaConf.merge(cfg, override_cfg)
+    model = instantiate(cfg.model)
+    return model, cfg, run_dir
 
 
 def load_checkpoint_if_needed(model: torch.nn.Module, ckpt_path: str | None) -> None:
@@ -149,7 +190,21 @@ def try_torch_profiler_flops(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Profile model params/FLOPs/latency.")
-    parser.add_argument("--config-name", required=True, help="Hydra config name, e.g. lgmamba_lightfsde_cached_ep300_policy")
+    parser.add_argument(
+        "--config-name",
+        default=None,
+        help="Hydra config name, e.g. lgmamba_lightfsde_cached_ep300_policy",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Saved run name under save_root. If set, loads saved/<run_name>/config.yaml.",
+    )
+    parser.add_argument(
+        "--save-root",
+        default="saved",
+        help="Save root for --run-name mode (default: saved).",
+    )
     parser.add_argument(
         "--override",
         action="append",
@@ -165,7 +220,14 @@ def main() -> None:
     )
     parser.add_argument("--device", default="cuda", help="cuda or cpu")
     parser.add_argument("--dtype", default="float32", choices=["float32", "float16", "bfloat16"])
-    parser.add_argument("--checkpoint", default=None, help="Path to checkpoint .pth")
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help=(
+            "Optional checkpoint .pth path. In --run-name mode, if omitted it auto-picks "
+            "best_model.pth/model_best.pth/latest checkpoint from the run directory."
+        ),
+    )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=30)
     args = parser.parse_args()
@@ -173,8 +235,32 @@ def main() -> None:
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but not available.")
 
-    model = build_model(config_name=args.config_name, overrides=args.override)
-    load_checkpoint_if_needed(model, args.checkpoint)
+    if (args.config_name is None) == (args.run_name is None):
+        raise ValueError("Use exactly one of --config-name or --run-name.")
+
+    if args.run_name is not None:
+        model, cfg, run_dir = build_model_from_run_name(
+            run_name=args.run_name,
+            save_root=args.save_root,
+            overrides=args.override,
+        )
+        if args.checkpoint is None:
+            ckpt_path = find_best_checkpoint(run_dir)
+        else:
+            raw = Path(args.checkpoint).expanduser()
+            ckpt_path = raw if raw.is_absolute() else (run_dir / raw)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+        checkpoint_str = str(ckpt_path)
+    else:
+        model, cfg = build_model_from_config_name(
+            config_name=args.config_name, overrides=args.override
+        )
+        checkpoint_str = args.checkpoint
+        if checkpoint_str is not None and not Path(checkpoint_str).expanduser().exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_str}")
+
+    load_checkpoint_if_needed(model, checkpoint_str)
     wrapper = LogitsOnlyWrapper(model).to(args.device).eval()
 
     dtype_map = {
@@ -202,11 +288,12 @@ def main() -> None:
     print("Profile Summary")
     print("=" * 80)
     print(f"config_name        : {args.config_name}")
+    print(f"run_name           : {args.run_name}")
     if args.override:
         print(f"overrides          : {args.override}")
     print(f"input_shape        : {_format_shape(args.input_shape)}")
     print(f"device/dtype       : {args.device} / {args.dtype}")
-    print(f"checkpoint         : {args.checkpoint}")
+    print(f"checkpoint         : {checkpoint_str}")
     print("-" * 80)
     print(f"params_total       : {total_params:,} ({total_params/1e6:.4f} M)")
     print(f"params_trainable   : {trainable_params:,} ({trainable_params/1e6:.4f} M)")
