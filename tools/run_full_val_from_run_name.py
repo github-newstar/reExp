@@ -40,9 +40,11 @@ def _checkpoint_epoch_key(path: Path) -> int:
 
 
 def _find_best_checkpoint(run_dir: Path) -> Path:
-    best_path = run_dir / "model_best.pth"
-    if best_path.exists():
-        return best_path
+    # Prefer explicit best checkpoint names first.
+    for name in ("best_model.pth", "model_best.pth"):
+        best_path = run_dir / name
+        if best_path.exists():
+            return best_path
 
     candidates = sorted(
         run_dir.glob("checkpoint-epoch*.pth"),
@@ -88,6 +90,14 @@ def main():
         default="saved",
         help="Root directory containing run folders (default: saved).",
     )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help=(
+            "Optional checkpoint path. If relative, it will be resolved under "
+            "saved/<run_name>/. If not set, auto-select best checkpoint in run dir."
+        ),
+    )
     args = parser.parse_args()
 
     run_dir = ROOT_PATH / args.save_root / args.run_name
@@ -95,7 +105,14 @@ def main():
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
 
-    checkpoint_path = _find_best_checkpoint(run_dir)
+    if args.checkpoint is None:
+        checkpoint_path = _find_best_checkpoint(run_dir)
+    else:
+        raw_ckpt = Path(args.checkpoint).expanduser()
+        checkpoint_path = raw_ckpt if raw_ckpt.is_absolute() else run_dir / raw_ckpt
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
     config = OmegaConf.load(config_path)
 
     OmegaConf.set_struct(config, False)
