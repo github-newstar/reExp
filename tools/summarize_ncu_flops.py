@@ -69,6 +69,57 @@ def _pick_metric_indices(header: list[str]) -> tuple[int | None, int | None]:
     return name_idx, value_idx
 
 
+def _extract_wide_metric_sums(rows: list[list[str]]) -> dict[str, float]:
+    if not rows:
+        return {}
+    header = [h.strip() for h in rows[0]]
+    if not header:
+        return {}
+
+    # Nsight "raw page" wide table: one kernel per row, one metric per column.
+    sum_suffix = ".sum"
+    smsp_pat = re.compile(r"^(?:smsp|sm)__sass_thread_inst_executed_op_.*_pred_on(?:\.sum)?$")
+    flop_pat = re.compile(r"^flop_count_.*(?:\.sum)?$")
+
+    metric_cols: list[tuple[int, str]] = []
+    for idx, col in enumerate(header):
+        col_name = col.strip()
+        if not col_name:
+            continue
+        if not (flop_pat.match(col_name) or smsp_pat.match(col_name)):
+            continue
+        if col_name.endswith(sum_suffix):
+            norm_name = col_name[: -len(sum_suffix)]
+            metric_cols.append((idx, norm_name))
+
+    # If no *.sum columns exist, fall back to raw metric columns.
+    if not metric_cols:
+        for idx, col in enumerate(header):
+            col_name = col.strip()
+            if flop_pat.match(col_name) or smsp_pat.match(col_name):
+                metric_cols.append((idx, col_name))
+
+    if not metric_cols:
+        return {}
+
+    sums: dict[str, float] = defaultdict(float)
+    for row in rows[1:]:
+        if not row:
+            continue
+        # Skip units row and non-data rows.
+        id_cell = row[0].strip() if row else ""
+        if id_cell and not id_cell.isdigit():
+            continue
+        for idx, name in metric_cols:
+            if idx >= len(row):
+                continue
+            value = _parse_float(row[idx])
+            if value is None:
+                continue
+            sums[name] += value
+    return dict(sums)
+
+
 def read_metric_sums(csv_path: Path) -> dict[str, float]:
     sums: dict[str, float] = defaultdict(float)
     metric_name_idx = None
@@ -121,6 +172,9 @@ def read_metric_sums(csv_path: Path) -> dict[str, float]:
             value = _parse_float(row[1])
             if value is not None:
                 sums[name] += value
+
+    if not sums:
+        sums = _extract_wide_metric_sums(rows)
 
     return dict(sums)
 
