@@ -1,0 +1,21 @@
+defaults:
+  - lgmamba_lightfsde_shallow_skip12_no_eca_eca_c3_3trimamba_eca_c3_3trimamba_cached_ep300_fullval_20_5_2
+  - _self_
+
+loss_function:
+  _delete_: true
+  _target_: src.loss.GeneralizedDiceFocalSegLoss
+  gdice_weight: 1.0
+  gfocal_weight: 1.0
+  gamma: 2.0
+  channel_weights: [1.0, 1.0, 1.0]
+  v0: 1.0
+  v1: 100.0
+  deep_supervision: true
+  deep_supervision_weights: [0.5, 0.25]
+  smooth_nr: 1e-5
+  smooth_dr: 1e-5
+
+writer:
+  run_name: lgm_shallow_skip12_no_eca_eca_c3_3trimamba_eca_c3_3trimamba_ep300_fullval_20_5_2_gdfl_w111
+  loss_names: ["loss", "loss_gdice", "loss_gfocal", "loss_ds"]
