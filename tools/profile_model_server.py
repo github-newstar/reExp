@@ -18,11 +18,13 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
+from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import torch
 from hydra import compose, initialize_config_dir
@@ -155,12 +157,206 @@ def benchmark_runtime(
     return total_ms, ms_per_iter, fps, peak_mem_mb
 
 
-def try_fvcore_flops(model: torch.nn.Module, x: torch.Tensor) -> tuple[float | None, str]:
+def _safe_prod(values: Iterable[int]) -> int | None:
+    out = 1
+    for v in values:
+        if v is None or int(v) <= 0:
+            return None
+        out *= int(v)
+    return out
+
+
+def _value_shape(value: Any) -> tuple[int, ...] | None:
+    try:
+        t = value.type()
+        if not hasattr(t, "sizes"):
+            return None
+        sizes = t.sizes()
+        if sizes is None:
+            return None
+        shape = []
+        for s in sizes:
+            if s is None:
+                return None
+            si = int(s)
+            if si <= 0:
+                return None
+            shape.append(si)
+        return tuple(shape)
+    except Exception:
+        return None
+
+
+def _tensor_numel_from_value(value: Any) -> int | None:
+    shape = _value_shape(value)
+    if shape is None:
+        return None
+    return _safe_prod(shape)
+
+
+def _output_numel(outputs: list[Any], inputs: list[Any]) -> int:
+    for value in outputs:
+        n = _tensor_numel_from_value(value)
+        if n is not None:
+            return n
+    for value in inputs:
+        n = _tensor_numel_from_value(value)
+        if n is not None:
+            return n
+    return 0
+
+
+def _elementwise_flop_handler(op_name: str, cost_per_elem: float):
+    def _handler(inputs: list[Any], outputs: list[Any]) -> Counter[str]:
+        n = _output_numel(outputs, inputs)
+        return Counter({op_name: float(n) * float(cost_per_elem)})
+
+    return _handler
+
+
+def _fft_rfftn_flop_jit(inputs: list[Any], outputs: list[Any]) -> Counter[str]:
+    in_shape = _value_shape(inputs[0]) if inputs else None
+    if in_shape is None or len(in_shape) < 3:
+        return Counter({"fft_rfftn": 0.0})
+    signal_shape = in_shape[-3:]
+    signal_n = _safe_prod(signal_shape)
+    batch = _safe_prod(in_shape[:-3]) if len(in_shape) > 3 else 1
+    if signal_n is None or batch is None:
+        return Counter({"fft_rfftn": 0.0})
+    # Real FFT complexity uses the common 2.5 * N * log2(N) approximation.
+    flops = 2.5 * float(batch) * float(signal_n) * math.log2(max(signal_n, 2))
+    return Counter({"fft_rfftn": flops})
+
+
+def _fft_irfftn_flop_jit(inputs: list[Any], outputs: list[Any]) -> Counter[str]:
+    out_shape = _value_shape(outputs[0]) if outputs else None
+    if out_shape is None or len(out_shape) < 3:
+        return Counter({"fft_irfftn": 0.0})
+    signal_shape = out_shape[-3:]
+    signal_n = _safe_prod(signal_shape)
+    batch = _safe_prod(out_shape[:-3]) if len(out_shape) > 3 else 1
+    if signal_n is None or batch is None:
+        return Counter({"fft_irfftn": 0.0})
+    # Inverse real FFT uses the same asymptotic approximation.
+    flops = 2.5 * float(batch) * float(signal_n) * math.log2(max(signal_n, 2))
+    return Counter({"fft_irfftn": flops})
+
+
+def _adaptive_avg_pool3d_flop_jit(inputs: list[Any], outputs: list[Any]) -> Counter[str]:
+    in_shape = _value_shape(inputs[0]) if inputs else None
+    out_shape = _value_shape(outputs[0]) if outputs else None
+    out_numel = _output_numel(outputs, inputs)
+    if in_shape is None or out_shape is None or len(in_shape) < 5 or len(out_shape) < 5:
+        return Counter({"adaptive_avg_pool3d": float(out_numel)})
+    id_, ih, iw = in_shape[-3:]
+    od, oh, ow = out_shape[-3:]
+    kd = max(id_ // od, 1)
+    kh = max(ih // oh, 1)
+    kw = max(iw // ow, 1)
+    kernel_vol = kd * kh * kw
+    return Counter({"adaptive_avg_pool3d": float(out_numel * kernel_vol)})
+
+
+def _upsample_trilinear3d_flop_jit(inputs: list[Any], outputs: list[Any]) -> Counter[str]:
+    out_numel = _output_numel(outputs, inputs)
+    # Trilinear interpolation roughly uses 8 weighted samples and 7 accumulations.
+    return Counter({"upsample_trilinear3d": float(out_numel) * 15.0})
+
+
+def _mamba_inner_fn_flop_jit(inputs: list[Any], outputs: list[Any]) -> Counter[str]:
+    if len(inputs) < 8:
+        return Counter({"mamba_inner_fn": 0.0})
+    xz_shape = _value_shape(inputs[0])
+    if xz_shape is None or len(xz_shape) < 3:
+        return Counter({"mamba_inner_fn": 0.0})
+    batch = int(xz_shape[0])
+    seq_len = int(xz_shape[-1])
+    d_inner = max(int(xz_shape[1]) // 2, 1)
+
+    conv_w_shape = _value_shape(inputs[1]) if len(inputs) > 1 else None
+    x_proj_w_shape = _value_shape(inputs[3]) if len(inputs) > 3 else None
+    delta_proj_w_shape = _value_shape(inputs[4]) if len(inputs) > 4 else None
+    out_proj_w_shape = _value_shape(inputs[5]) if len(inputs) > 5 else None
+    a_shape = _value_shape(inputs[7]) if len(inputs) > 7 else None
+
+    d_conv = int(conv_w_shape[-1]) if conv_w_shape and len(conv_w_shape) >= 1 else 0
+    d_state = int(a_shape[1]) if a_shape and len(a_shape) >= 2 else 0
+    dt_rank = int(delta_proj_w_shape[1]) if delta_proj_w_shape and len(delta_proj_w_shape) >= 2 else 0
+    d_model = int(out_proj_w_shape[0]) if out_proj_w_shape and len(out_proj_w_shape) >= 1 else 0
+    x_proj_out = int(x_proj_w_shape[0]) if x_proj_w_shape and len(x_proj_w_shape) >= 1 else 0
+
+    flops = 0.0
+    # Depth-wise causal conv in the fused kernel.
+    if d_conv > 0:
+        flops += float(batch * seq_len * d_inner * d_conv)
+    # x_proj: (B*L, d_inner) x (d_inner, x_proj_out)
+    if x_proj_out > 0:
+        flops += float(batch * seq_len * d_inner * x_proj_out)
+    # delta_proj: (B*L, dt_rank) x (dt_rank, d_inner)
+    if dt_rank > 0:
+        flops += float(batch * seq_len * d_inner * dt_rank)
+    # Selective scan core (VMamba/Mamba family common approximation).
+    if d_state > 0:
+        flops += float(9 * batch * seq_len * d_inner * d_state)
+    # D and z gates (element-wise terms).
+    flops += float(2 * batch * seq_len * d_inner)
+    # out_proj: (B*L, d_inner) x (d_inner, d_model)
+    if d_model > 0:
+        flops += float(batch * seq_len * d_inner * d_model)
+    return Counter({"mamba_inner_fn": flops})
+
+
+def _register_fvcore_custom_op_handles(analysis: Any) -> Any:
+    custom_ops = {
+        "prim::PythonOp.MambaInnerFn": _mamba_inner_fn_flop_jit,
+        "prim::PythonOp.SelectiveScanFn": _mamba_inner_fn_flop_jit,
+        "aten::fft_rfftn": _fft_rfftn_flop_jit,
+        "aten::fft_irfftn": _fft_irfftn_flop_jit,
+        "aten::adaptive_avg_pool3d": _adaptive_avg_pool3d_flop_jit,
+        "aten::upsample_trilinear3d": _upsample_trilinear3d_flop_jit,
+        "aten::view_as_complex": _elementwise_flop_handler("view_as_complex", 0.0),
+        "aten::view_as_real": _elementwise_flop_handler("view_as_real", 0.0),
+        "aten::add": _elementwise_flop_handler("add", 1.0),
+        "aten::add_": _elementwise_flop_handler("add_", 1.0),
+        "aten::mul": _elementwise_flop_handler("mul", 1.0),
+        "aten::mul_": _elementwise_flop_handler("mul_", 1.0),
+        "aten::neg": _elementwise_flop_handler("neg", 1.0),
+        "aten::exp": _elementwise_flop_handler("exp", 1.0),
+        "aten::sigmoid": _elementwise_flop_handler("sigmoid", 4.0),
+        "aten::silu": _elementwise_flop_handler("silu", 5.0),
+        "aten::silu_": _elementwise_flop_handler("silu_", 5.0),
+    }
+    return analysis.set_op_handle(**custom_ops)
+
+
+def _unsupported_ops_summary(unsupported: Any, max_items: int = 8) -> str:
+    if not unsupported:
+        return "none"
+    if hasattr(unsupported, "most_common"):
+        items = unsupported.most_common(max_items)
+    else:
+        try:
+            items = list(unsupported.items())[:max_items]
+        except Exception:
+            return str(unsupported)
+    return ", ".join(f"{name}:{count}" for name, count in items)
+
+
+def try_fvcore_flops(
+    model: torch.nn.Module, x: torch.Tensor, use_custom_ops: bool = False
+) -> tuple[float | None, str]:
     try:
         from fvcore.nn import FlopCountAnalysis
 
-        flops = FlopCountAnalysis(model, x).total()
-        return float(flops), "ok"
+        analysis = FlopCountAnalysis(model, x)
+        if use_custom_ops:
+            analysis = _register_fvcore_custom_op_handles(analysis)
+        flops = analysis.total()
+        unsupported = analysis.unsupported_ops()
+        msg = "ok"
+        if use_custom_ops:
+            msg += f"; custom_ops=on; unsupported={_unsupported_ops_summary(unsupported)}"
+        return float(flops), msg
     except Exception as e:  # pragma: no cover
         return None, f"{type(e).__name__}: {e}"
 
@@ -232,6 +428,14 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument(
+        "--fvcore-custom-ops",
+        action="store_true",
+        help=(
+            "Enable custom fvcore op handlers for Mamba/FFT/element-wise ops. "
+            "Useful when default fvcore misses FLOPs for unsupported operators."
+        ),
+    )
+    parser.add_argument(
         "--no-torch-profiler",
         action="store_true",
         help=(
@@ -290,7 +494,9 @@ def main() -> None:
         wrapper, x, warmup=args.warmup, iters=args.iters, device=args.device
     )
 
-    fv_flops, fv_msg = try_fvcore_flops(wrapper, x)
+    fv_flops, fv_msg = try_fvcore_flops(
+        wrapper, x, use_custom_ops=args.fvcore_custom_ops
+    )
 
     ncu_related_env = any(
         key in os.environ
@@ -324,6 +530,8 @@ def main() -> None:
     print("-" * 80)
     if fv_flops is not None:
         print(f"flops_fvcore       : {fv_flops:.0f} ({fv_flops/1e9:.4f} G)")
+        if fv_msg != "ok":
+            print(f"flops_fvcore_note  : {fv_msg}")
     else:
         print(f"flops_fvcore       : unavailable ({fv_msg})")
     if pr_flops is not None:
