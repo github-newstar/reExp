@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 model:
-  _target_: src.model.LGMambaLightFSDEShallowSkip12NoECA_MambaECAMambaECANet
+  _target_: src.model.LGMambaLightFSDEShallowSkip12NoECAECAMambaECAMambaNet
   in_channels: 4
   out_channels: 3
   feature_channels: [32, 64, 128, 256]
@@ -14,7 +14,7 @@ model:
   use_channel_shuffle_deep: true
 
 writer:
-  run_name: lgm_shallow_skip12_no_eca_mamba_eca_mamba_eca_ep300_fullval_20_5_2
+  run_name: lgm_shallow_skip12_no_eca_eca_mamba_eca_mamba_ep300_fullval_20_5_2
 
 optimizer:
   _target_: torch.optim.AdamW
