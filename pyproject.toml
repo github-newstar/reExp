@@ -17,6 +17,7 @@ dependencies = [
     "hydra-core",
     "omegaconf",
     "monai>=1.5.2",
+    "fvcore",
     "scipy",
     "nibabel",
     "simpleitk",
