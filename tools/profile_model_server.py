@@ -157,6 +157,28 @@ def benchmark_runtime(
     return total_ms, ms_per_iter, fps, peak_mem_mb
 
 
+def run_inference_only(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    warmup: int,
+    iters: int,
+    device: str,
+) -> int:
+    model.eval()
+    if device.startswith("cuda"):
+        torch.cuda.synchronize()
+    with torch.inference_mode():
+        for _ in range(max(warmup, 0)):
+            _ = model(x)
+        if device.startswith("cuda"):
+            torch.cuda.synchronize()
+        for _ in range(max(iters, 1)):
+            _ = model(x)
+        if device.startswith("cuda"):
+            torch.cuda.synchronize()
+    return max(warmup, 0) + max(iters, 1)
+
+
 def _safe_prod(values: Iterable[int]) -> int | None:
     out = 1
     for v in values:
@@ -428,6 +450,14 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument(
+        "--inference-only",
+        action="store_true",
+        help=(
+            "Run inference forward only (torch.inference_mode), then exit. "
+            "Skips runtime/fvcore/torch.profiler summary to keep NCU traces clean."
+        ),
+    )
+    parser.add_argument(
         "--fvcore-custom-ops",
         action="store_true",
         help=(
@@ -489,6 +519,34 @@ def main() -> None:
         wrapper = wrapper.to(dtype=dtype)
 
     total_params, trainable_params = count_params(wrapper)
+
+    if args.inference_only:
+        # Avoid extra cudnn search noise in Nsight runs.
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.benchmark = False
+        total_forwards = run_inference_only(
+            wrapper, x, warmup=args.warmup, iters=args.iters, device=args.device
+        )
+        print("=" * 80)
+        print("Inference-Only Run")
+        print("=" * 80)
+        print(f"config_name        : {args.config_name}")
+        print(f"run_name           : {args.run_name}")
+        if args.override:
+            print(f"overrides          : {args.override}")
+        print(f"input_shape        : {_format_shape(args.input_shape)}")
+        print(f"device/dtype       : {args.device} / {args.dtype}")
+        print(f"checkpoint         : {checkpoint_str}")
+        print("-" * 80)
+        print(f"params_total       : {total_params:,} ({total_params/1e6:.4f} M)")
+        print(f"params_trainable   : {trainable_params:,} ({trainable_params/1e6:.4f} M)")
+        print("-" * 80)
+        print(f"forward_calls      : {total_forwards} (warmup={args.warmup}, iters={args.iters})")
+        print(
+            "note               : inference-only mode skips runtime/fvcore/profiler FLOPs summary"
+        )
+        print("=" * 80)
+        return
 
     total_ms, ms_per_iter, fps, peak_mem_mb = benchmark_runtime(
         wrapper, x, warmup=args.warmup, iters=args.iters, device=args.device
