@@ -14,6 +14,8 @@ from src.model.lgmambanet import (
     GTSMambaBottleneckPrePostECA,
     GTSMambaBottleneckResidualInject,
     GTSMambaBottleneckSpatialPrior,
+    GTSMambaBottleneckTriMambaECATriMambaECA,
+    GTSMambaBottleneckTriMambaECATriMambaECAShared,
 )
 from src.model.lmambanet import DIDCBlock
 
@@ -908,6 +910,98 @@ class LGMambaLightFSDEShallowSkip12NoECA_DWConvECAMambaECAMambaNet(
         )
         c4 = int(feature_channels[3])
         self.bottleneck = GTSMambaBottleneckDWConvECAMambaECAMamba(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEShallowSkip12NoECA_3TriMambaECA_3TriMambaECANet(
+    LGMambaLightFSDEShallowSkip12NoECA_MambaECAMambaECANet
+):
+    """
+    Variant based on:
+    LGMambaLightFSDEShallowSkip12NoECA_MambaECAMambaECANet
+
+    Keep:
+    - Shallow encoder stage 1/2 without ECA
+    - Decoder stage dec1/dec2 without ECA
+
+    Replace bottleneck with:
+    3TriMamba -> ECA -> 3TriMamba -> ECA
+    (independent Mamba parameters across 3 ToM branches)
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckTriMambaECATriMambaECA(
+            channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEShallowSkip12NoECA_3TriMambaECA_3TriMambaECASharedNet(
+    LGMambaLightFSDEShallowSkip12NoECA_3TriMambaECA_3TriMambaECANet
+):
+    """
+    Shared-Mamba variant of:
+    3TriMamba -> ECA -> 3TriMamba -> ECA.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        c4 = int(feature_channels[3])
+        self.bottleneck = GTSMambaBottleneckTriMambaECATriMambaECAShared(
             channels=c4,
             mamba_state=mamba_state,
             mamba_conv=mamba_conv,

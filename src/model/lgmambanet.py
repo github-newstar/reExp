@@ -4,6 +4,96 @@ from torch import nn
 from src.model.lmambanet import DIDCBlock, ECABlock3D
 
 
+class TriOrientMamba3D(nn.Module):
+    """
+    Tri-orientated Mamba (ToM) for 3D feature maps.
+
+    Input/Output: (B, C, D, H, W)
+    Branches:
+    - Forward sequence on flattened (D, H, W)
+    - Reverse sequence on flipped flattened (D, H, W)
+    - Inter-slice sequence on flattened (H, W, D)
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        share_mamba: bool = False,
+    ):
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        from mamba_ssm import Mamba
+
+        self.share_mamba = bool(share_mamba)
+        self.norm_f = nn.LayerNorm(channels)
+        self.norm_r = nn.LayerNorm(channels)
+        self.norm_s = nn.LayerNorm(channels)
+
+        if self.share_mamba:
+            self.mamba_shared = Mamba(
+                d_model=channels,
+                d_state=mamba_state,
+                d_conv=mamba_conv,
+                expand=mamba_expand,
+            )
+        else:
+            self.mamba_f = Mamba(
+                d_model=channels,
+                d_state=mamba_state,
+                d_conv=mamba_conv,
+                expand=mamba_expand,
+            )
+            self.mamba_r = Mamba(
+                d_model=channels,
+                d_state=mamba_state,
+                d_conv=mamba_conv,
+                expand=mamba_expand,
+            )
+            self.mamba_s = Mamba(
+                d_model=channels,
+                d_state=mamba_state,
+                d_conv=mamba_conv,
+                expand=mamba_expand,
+            )
+
+    def _run_branch(self, seq: torch.Tensor, branch: str) -> torch.Tensor:
+        if self.share_mamba:
+            return self.mamba_shared(seq)
+        if branch == "f":
+            return self.mamba_f(seq)
+        if branch == "r":
+            return self.mamba_r(seq)
+        if branch == "s":
+            return self.mamba_s(seq)
+        raise ValueError(f"Unknown branch name: {branch}")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, d, h, w = x.shape
+
+        # Forward branch: flatten in (D, H, W) order.
+        seq_f = x.permute(0, 2, 3, 4, 1).reshape(b, d * h * w, c)
+        out_f = self._run_branch(self.norm_f(seq_f), branch="f")
+
+        # Reverse branch: flip the flattened sequence, then flip back.
+        seq_r = self.norm_r(seq_f)
+        seq_r = torch.flip(seq_r, dims=[1])
+        out_r = self._run_branch(seq_r, branch="r")
+        out_r = torch.flip(out_r, dims=[1])
+
+        # Inter-slice branch: scan depth-contiguous sequence under (H, W, D).
+        seq_s = x.permute(0, 3, 4, 2, 1).reshape(b, h * w * d, c)
+        out_s = self._run_branch(self.norm_s(seq_s), branch="s")
+
+        out_f = out_f.view(b, d, h, w, c).permute(0, 4, 1, 2, 3).contiguous()
+        out_r = out_r.view(b, d, h, w, c).permute(0, 4, 1, 2, 3).contiguous()
+        out_s = out_s.view(b, h, w, d, c).permute(0, 4, 3, 1, 2).contiguous()
+        return out_f + out_r + out_s
+
+
 class GTSMambaBottleneck(nn.Module):
     """
     Grouped Tri-Axis Shuffling Mamba bottleneck for 3D volumes.
@@ -840,6 +930,107 @@ class GTSMambaBottleneckDWConvECAMambaECAMamba(GTSMambaBottleneck):
         grouped = self._run_tri_axis_mamba_b(grouped)
         out = self.fuse(grouped)
         return out + residual
+
+
+class GTSMambaBottleneckTriMambaECATriMambaECA(nn.Module):
+    """
+    Bottleneck sequence: 3TriMamba -> ECA -> 3TriMamba -> ECA.
+
+    Notes:
+    - "3TriMamba" is ToM with 3 orientation branches (forward/reverse/inter-slice).
+    - `share_tri_mamba=True` shares one Mamba instance across 3 branches in each
+      TriMamba module.
+    - Two TriMamba passes keep independent parameter sets from each other.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+        share_tri_mamba: bool = False,
+    ):
+        super().__init__()
+        self.use_channel_shuffle = bool(use_channel_shuffle)
+
+        # Keep grouped projection/fusion style consistent with existing bottlenecks.
+        branch_channels = (channels + 2) // 3
+        grouped_channels = branch_channels * 3
+        self.use_group_proj = grouped_channels != channels
+        self.group_proj = (
+            nn.Conv3d(channels, grouped_channels, kernel_size=1, bias=False)
+            if self.use_group_proj
+            else nn.Identity()
+        )
+
+        self.tri_mamba1 = TriOrientMamba3D(
+            channels=grouped_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            share_mamba=share_tri_mamba,
+        )
+        self.tri_mamba2 = TriOrientMamba3D(
+            channels=grouped_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            share_mamba=share_tri_mamba,
+        )
+
+        self.eca1 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+        self.eca2 = (
+            ECABlock3D(channels=grouped_channels)
+            if self.use_channel_shuffle
+            else nn.Identity()
+        )
+
+        self.fuse = nn.Sequential(
+            nn.Conv3d(grouped_channels, channels, kernel_size=1, bias=False),
+            nn.InstanceNorm3d(channels),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        grouped = self.group_proj(x)
+        grouped = self.tri_mamba1(grouped)
+        grouped = self.eca1(grouped)
+        grouped = self.tri_mamba2(grouped)
+        grouped = self.eca2(grouped)
+        out = self.fuse(grouped)
+        return out + residual
+
+
+class GTSMambaBottleneckTriMambaECATriMambaECAShared(
+    GTSMambaBottleneckTriMambaECATriMambaECA
+):
+    """
+    Shared-parameter variant of 3TriMamba -> ECA -> 3TriMamba -> ECA.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__(
+            channels=channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+            share_tri_mamba=True,
+        )
 
 
 class LGMambaNet(nn.Module):
