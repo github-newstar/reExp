@@ -184,8 +184,20 @@ class GeneralizedDiceFocalSegLoss(nn.Module):
         deep_supervision_weights=(0.5, 0.25),
         smooth_nr=1e-5,
         smooth_dr=1e-5,
+        # Backward-compatible aliases from DiceFocalSegLoss:
+        dice_weight=None,
+        focal_weight=None,
+        alpha=None,
+        squared_pred=None,
+        **kwargs,
     ):
         super().__init__()
+        # Prefer explicit generalized names; fall back to old names if only they are given.
+        if dice_weight is not None and gdice_weight == 1.0:
+            gdice_weight = dice_weight
+        if focal_weight is not None and gfocal_weight == 1.0:
+            gfocal_weight = focal_weight
+
         self.gdice_weight = float(gdice_weight)
         self.gfocal_weight = float(gfocal_weight)
         self.gamma = float(gamma)
@@ -198,6 +210,8 @@ class GeneralizedDiceFocalSegLoss(nn.Module):
         self.deep_supervision_weights = tuple(float(w) for w in deep_supervision_weights)
         self.smooth_nr = float(smooth_nr)
         self.smooth_dr = float(smooth_dr)
+        # Unused legacy args are intentionally accepted for Hydra merge compatibility.
+        _ = alpha, squared_pred, kwargs
 
     @staticmethod
     def _expand_channel_weight(weight, num_channels, dtype, device):
