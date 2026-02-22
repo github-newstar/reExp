@@ -9,12 +9,14 @@ Key behavior:
   - model_best.pth (compatibility fallback)
 - Evaluates on full test split (three-way split, test_ratio=0.1, usage_ratio=1.0).
 - Uses sliding-window inference + 8-view flip TTA.
+- Supports two Dice aggregation modes:
+  - micro: global accumulation over all voxels/cases
+  - macro: per-case Dice then average over cases
 """
 
 from __future__ import annotations
 
 import argparse
-import copy
 import logging
 import sys
 from pathlib import Path
@@ -23,6 +25,17 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _set_track_meta_false():
+    try:
+        from monai.data.meta_obj import set_track_meta
+    except Exception:
+        try:
+            from monai.data.meta_tensor import set_track_meta
+        except Exception:
+            return
+    set_track_meta(False)
 
 
 def _find_best_checkpoint(run_dir: Path) -> tuple[Path, str]:
@@ -94,6 +107,7 @@ def _ensure_test_dataset_cfg(cfg) -> None:
 def _build_eval_dataloader(cfg, part: str):
     from hydra.utils import instantiate
     from omegaconf import OmegaConf
+
     from src.datasets.collate import collate_fn
     from src.utils.init_utils import set_worker_seed
 
@@ -147,13 +161,12 @@ def _tta_flip_combinations():
 
 
 def _sliding_window_with_tta(model, image, roi_size, sw_batch_size, overlap):
-    import torch
     from monai.inferers import sliding_window_inference
 
     combos = _tta_flip_combinations()
     logits_sum = None
     for dims in combos:
-        image_in = torch.flip(image, dims=dims) if dims else image
+        image_in = image.flip(dims=dims) if dims else image
         logits = sliding_window_inference(
             inputs=image_in,
             roi_size=roi_size,
@@ -162,24 +175,46 @@ def _sliding_window_with_tta(model, image, roi_size, sw_batch_size, overlap):
             overlap=overlap,
         )
         if dims:
-            logits = torch.flip(logits, dims=dims)
+            logits = logits.flip(dims=dims)
         logits = logits.float()
         logits_sum = logits if logits_sum is None else logits_sum + logits
     return logits_sum / float(len(combos))
 
 
-def _init_dice_accumulator(device):
+def _compute_case_dice_per_channel(pred_channels, label_channels, smooth=1e-5):
+    pred = pred_channels.float()
+    target = label_channels.float()
+    pred_flat = pred.flatten(start_dim=2)
+    target_flat = target.flatten(start_dim=2)
+
+    intersection = (pred_flat * target_flat).sum(dim=2)
+    pred_sum = pred_flat.sum(dim=2)
+    target_sum = target_flat.sum(dim=2)
+
+    return (2.0 * intersection + smooth) / (pred_sum + target_sum + smooth)
+
+
+def _init_micro_accumulator(num_channels: int, device):
     import torch
 
     return {
-        "intersection": torch.zeros(3, dtype=torch.float64, device=device),
-        "pred_sum": torch.zeros(3, dtype=torch.float64, device=device),
-        "target_sum": torch.zeros(3, dtype=torch.float64, device=device),
+        "intersection": torch.zeros(num_channels, dtype=torch.float64, device=device),
+        "pred_sum": torch.zeros(num_channels, dtype=torch.float64, device=device),
+        "target_sum": torch.zeros(num_channels, dtype=torch.float64, device=device),
         "num_cases": 0,
     }
 
 
-def _update_dice_accumulator(acc, pred_channels, label_channels):
+def _init_macro_accumulator(num_channels: int, device):
+    import torch
+
+    return {
+        "dice_sum": torch.zeros(num_channels, dtype=torch.float64, device=device),
+        "num_cases": 0,
+    }
+
+
+def _update_micro_accumulator(acc, pred_channels, label_channels):
     pred = pred_channels.float()
     target = label_channels.float()
     pred_flat = pred.flatten(start_dim=2)
@@ -190,17 +225,45 @@ def _update_dice_accumulator(acc, pred_channels, label_channels):
     acc["num_cases"] += int(pred.shape[0])
 
 
-def _finalize_dice_accumulator(acc, smooth=1e-5):
+def _update_macro_accumulator(acc, pred_channels, label_channels):
+    case_dice = _compute_case_dice_per_channel(pred_channels, label_channels).double()
+    acc["dice_sum"] += case_dice.sum(dim=0)
+    acc["num_cases"] += int(case_dice.shape[0])
+
+
+def _finalize_micro_accumulator(acc, smooth=1e-5):
     dice = (2.0 * acc["intersection"] + smooth) / (
         acc["pred_sum"] + acc["target_sum"] + smooth
     )
+    mean_dice = float(dice.mean().item()) if dice.numel() > 0 else 0.0
     return {
-        "Dice_TC": float(dice[0].item()),
-        "Dice_WT": float(dice[1].item()),
-        "Dice_ET": float(dice[2].item()),
-        "MeanDice": float(dice.mean().item()),
+        "dice_channels": [float(x) for x in dice.tolist()],
+        "MeanDice": mean_dice,
         "num_cases": int(acc["num_cases"]),
     }
+
+
+def _finalize_macro_accumulator(acc):
+    if int(acc["num_cases"]) <= 0:
+        dice = acc["dice_sum"]
+    else:
+        dice = acc["dice_sum"] / float(acc["num_cases"])
+    mean_dice = float(dice.mean().item()) if dice.numel() > 0 else 0.0
+    return {
+        "dice_channels": [float(x) for x in dice.tolist()],
+        "MeanDice": mean_dice,
+        "num_cases": int(acc["num_cases"]),
+    }
+
+
+def _print_metrics_with_names(metrics):
+    channel_names = ["Dice_TC", "Dice_WT", "Dice_ET"]
+    dice_channels = metrics["dice_channels"]
+    for idx, value in enumerate(dice_channels):
+        name = channel_names[idx] if idx < len(channel_names) else f"Dice_C{idx}"
+        print(f"{name}: {value}")
+    print(f"MeanDice: {metrics['MeanDice']}")
+    print(f"num_cases: {metrics['num_cases']}")
 
 
 def main():
@@ -231,12 +294,23 @@ def main():
         default=0.5,
         help="Sigmoid threshold for prediction channels. Default: 0.5.",
     )
+    parser.add_argument(
+        "--dice-reduction",
+        choices=["micro", "macro", "both"],
+        default="both",
+        help=(
+            "Dice aggregation mode: "
+            "micro=global voxel accumulation, "
+            "macro=per-case mean, both=print both."
+        ),
+    )
     args = parser.parse_args()
 
     from hydra.utils import instantiate
     from omegaconf import OmegaConf
-    import torch
     from tqdm.auto import tqdm
+    import torch
+
     from src.utils.io_utils import ROOT_PATH
     from src.utils.init_utils import set_random_seed
     from src.utils.monai_compat import patch_monai_numpy_dtype_compat
@@ -257,6 +331,7 @@ def main():
     device = _resolve_device(config=cfg, cli_device=str(args.device).lower())
 
     patch_monai_numpy_dtype_compat()
+    _set_track_meta_false()
 
     logger = logging.getLogger("full_test_tta")
     logger.setLevel(logging.INFO)
@@ -289,7 +364,8 @@ def main():
     overlap = float(cfg.trainer.get("sw_overlap", 0.5))
 
     has_label = False
-    dice_acc = _init_dice_accumulator(device=device)
+    micro_acc = None
+    macro_acc = None
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc=f"{args.run_name}:test_tta", total=len(dataloader)):
@@ -308,8 +384,18 @@ def main():
             if label is not None:
                 has_label = True
                 label = label.to(device).float()
-                _update_dice_accumulator(
-                    acc=dice_acc,
+                if micro_acc is None:
+                    num_channels = int(pred_channels.shape[1])
+                    micro_acc = _init_micro_accumulator(num_channels=num_channels, device=device)
+                    macro_acc = _init_macro_accumulator(num_channels=num_channels, device=device)
+
+                _update_micro_accumulator(
+                    acc=micro_acc,
+                    pred_channels=pred_channels,
+                    label_channels=label,
+                )
+                _update_macro_accumulator(
+                    acc=macro_acc,
                     pred_channels=pred_channels,
                     label_channels=label,
                 )
@@ -324,12 +410,20 @@ def main():
     print(f"sw_batch_size: {sw_batch_size}")
     print(f"sw_overlap: {overlap}")
     print("tta_views: 8")
-    if has_label:
-        metrics = _finalize_dice_accumulator(dice_acc)
-        for key in ("Dice_TC", "Dice_WT", "Dice_ET", "MeanDice", "num_cases"):
-            print(f"{key}: {metrics[key]}")
-    else:
+
+    if not has_label:
         print("No label found in test batch, metrics unavailable.")
+        return
+
+    if args.dice_reduction in {"micro", "both"}:
+        micro_metrics = _finalize_micro_accumulator(micro_acc)
+        print("[Dice reduction: micro/global-accum]")
+        _print_metrics_with_names(micro_metrics)
+
+    if args.dice_reduction in {"macro", "both"}:
+        macro_metrics = _finalize_macro_accumulator(macro_acc)
+        print("[Dice reduction: macro/case-mean]")
+        _print_metrics_with_names(macro_metrics)
 
 
 if __name__ == "__main__":
