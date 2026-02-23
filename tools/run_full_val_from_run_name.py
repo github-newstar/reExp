@@ -124,6 +124,15 @@ def main():
             "then evaluate on val partition."
         ),
     )
+    parser.add_argument(
+        "--usage-ratio",
+        type=float,
+        default=1.0,
+        help=(
+            "Override datasets.*.usage_ratio for evaluation (default: 1.0, i.e. full set). "
+            "Set to a value in (0, 1] only when intentionally evaluating a subset."
+        ),
+    )
     args = parser.parse_args()
 
     run_dir = ROOT_PATH / args.save_root / args.run_name
@@ -159,12 +168,15 @@ def main():
         raise ValueError(
             f"--val-ratio + --test-ratio must be < 1, got {args.val_ratio + args.test_ratio}"
         )
+    if not (0.0 < float(args.usage_ratio) <= 1.0):
+        raise ValueError(f"--usage-ratio must be in (0, 1], got {args.usage_ratio}")
 
     datasets_cfg = config.get("datasets", {})
     for split_name in ("train", "val", "test"):
         split_cfg = datasets_cfg.get(split_name)
         if split_cfg is None:
             continue
+        split_cfg.usage_ratio = float(args.usage_ratio)
         if args.val_ratio is not None:
             split_cfg.split_strategy = "three_way"
             split_cfg.val_ratio = float(args.val_ratio)
@@ -207,6 +219,7 @@ def main():
             args.val_ratio,
             args.test_ratio,
         )
+    logger.info("Usage ratio override: %s", args.usage_ratio)
 
     dataloaders, batch_transforms = get_dataloaders(
         config=config,
