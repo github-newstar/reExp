@@ -16,6 +16,20 @@ lr_scheduler:
 writer:
   run_name: liunet_ep100_bs6_warm10_lr2e4_to_1e5_fullval_10_5_2
 
+datasets:
+  train:
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  val:
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  test:
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+
 dataloader:
   batch_size: 6
 
