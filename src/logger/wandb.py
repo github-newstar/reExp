@@ -60,6 +60,9 @@ class WandBWriter:
             logger.warning("For use wandb install it via \n\t pip install wandb")
 
         self.step = 0
+        self._step_offset = 0
+        self._step_offset_initialized = False
+        self._resume_step_floor = int(getattr(self.wandb.run, "step", 0) or 0)
         # the mode is usually equal to the current partition name
         # used to separate Partition1 and Partition2 metrics
         self.mode = ""
@@ -77,15 +80,29 @@ class WandBWriter:
             mode (str): current mode (partition name).
         """
         self.mode = mode
+        raw_step = int(step)
+
+        # When resuming an existing WandB run, WandB may already track a larger
+        # step than the trainer's recomputed local step (e.g. changed epoch_len).
+        # Shift all future local steps by a constant offset once to keep logging
+        # monotonic without dropping intermediate points.
+        if not self._step_offset_initialized:
+            if raw_step < self._resume_step_floor:
+                self._step_offset = self._resume_step_floor - raw_step + 1
+            self._step_offset_initialized = True
+
+        adjusted_step = raw_step + self._step_offset
         previous_step = self.step
-        self.step = step
-        if step == 0:
+        self.step = adjusted_step
+        if self.step == 0:
             self.timer = datetime.now()
         else:
             duration = datetime.now() - self.timer
-            self.add_scalar(
-                "steps_per_sec", (self.step - previous_step) / duration.total_seconds()
-            )
+            step_delta = self.step - previous_step
+            if step_delta > 0:
+                self.add_scalar(
+                    "steps_per_sec", step_delta / duration.total_seconds()
+                )
             self.timer = datetime.now()
 
     def _object_name(self, object_name):
