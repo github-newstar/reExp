@@ -18,8 +18,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_SCRIPT = ROOT / "tools" / "profile_model_server.py"
 
-PARAMS_RE = re.compile(r"^params_total\s*:\s*([\d,]+)", re.MULTILINE)
-FLOPS_RE = re.compile(r"^flops_fvcore\s*:\s*([0-9.]+)\s+\(([0-9.]+)\s+G\)", re.MULTILINE)
+PARAMS_RE = re.compile(r"^\s*params_total\s*:\s*([\d,]+)", re.MULTILINE)
+FLOPS_RE = re.compile(
+    r"^\s*flops_fvcore\s*:\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s+\(([0-9]+(?:\.[0-9]+)?)\s+G\)",
+    re.MULTILINE,
+)
+FLOPS_UNAVAILABLE_RE = re.compile(
+    r"^\s*flops_fvcore\s*:\s*unavailable\s*\((.+)\)\s*$", re.MULTILINE
+)
 
 
 def _run(cmd: list[str]) -> str:
@@ -42,9 +48,24 @@ def _extract_params_total(text: str) -> int:
 
 def _extract_flops_theoretical_g(text: str) -> float:
     m = FLOPS_RE.search(text)
-    if not m:
-        raise RuntimeError("Failed to parse flops_fvcore from profile output.")
-    return float(m.group(2))
+    if m:
+        return float(m.group(2))
+
+    m_unavailable = FLOPS_UNAVAILABLE_RE.search(text)
+    if m_unavailable:
+        raise RuntimeError(
+            "flops_fvcore is unavailable from profile output: "
+            f"{m_unavailable.group(1)}"
+        )
+
+    flops_line = next(
+        (line.strip() for line in text.splitlines() if "flops_fvcore" in line),
+        "<not found>",
+    )
+    raise RuntimeError(
+        "Failed to parse flops_fvcore from profile output. "
+        f"Raw flops line: {flops_line}"
+    )
 
 
 def main() -> None:
@@ -81,17 +102,32 @@ def main() -> None:
     ]
     output = _run(cmd)
     params_total = _extract_params_total(output)
-    flops_theory_g = _extract_flops_theoretical_g(output)
+    flops_theory_g: float | None
+    flops_note: str | None = None
+    try:
+        flops_theory_g = _extract_flops_theoretical_g(output)
+    except RuntimeError as exc:
+        msg = str(exc)
+        unavailable_prefix = "flops_fvcore is unavailable from profile output: "
+        if msg.startswith(unavailable_prefix):
+            flops_theory_g = None
+            flops_note = msg[len(unavailable_prefix) :].strip()
+        else:
+            raise
 
     print("=" * 80)
     print("Theoretical FLOPs")
     print("=" * 80)
     print(f"run_name           : {args.run_name}")
     print(f"params_total       : {params_total} ({params_total / 1e6:.4f} M)")
-    print(f"flops_theoretical_G: {flops_theory_g:.6f}")
+    if flops_theory_g is not None:
+        print(f"flops_theoretical_G: {flops_theory_g:.6f}")
+    else:
+        print("flops_theoretical_G: unavailable")
+        if flops_note:
+            print(f"flops_note         : {flops_note}")
     print("=" * 80)
 
 
 if __name__ == "__main__":
     main()
-

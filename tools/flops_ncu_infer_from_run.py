@@ -21,9 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE_SCRIPT = ROOT / "tools" / "profile_model_server.py"
 SUMMARIZE_SCRIPT = ROOT / "tools" / "summarize_ncu_flops.py"
 
-PARAMS_RE = re.compile(r"^params_total\s*:\s*([\d,]+)", re.MULTILINE)
+PARAMS_RE = re.compile(r"^\s*params_total\s*:\s*([\d,]+)", re.MULTILINE)
 FLOPS_THEORY_RE = re.compile(
-    r"^flops_fvcore\s*:\s*([0-9.]+)\s+\(([0-9.]+)\s+G\)", re.MULTILINE
+    r"^\s*flops_fvcore\s*:\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s+\(([0-9]+(?:\.[0-9]+)?)\s+G\)",
+    re.MULTILINE,
+)
+FLOPS_THEORY_UNAVAILABLE_RE = re.compile(
+    r"^\s*flops_fvcore\s*:\s*unavailable\s*\((.+)\)\s*$", re.MULTILINE
 )
 FLOPS_EXEC_RE = re.compile(r"^total_flops_G\s*:\s*([0-9.]+)", re.MULTILINE)
 
@@ -60,6 +64,26 @@ def _extract_or_raise(pattern: re.Pattern[str], text: str, name: str) -> str:
     return m.group(1)
 
 
+def _extract_theory_or_raise(text: str) -> str:
+    m = FLOPS_THEORY_RE.search(text)
+    if m:
+        return m.group(2)
+    m_unavailable = FLOPS_THEORY_UNAVAILABLE_RE.search(text)
+    if m_unavailable:
+        raise RuntimeError(
+            "flops_fvcore is unavailable from profile output: "
+            f"{m_unavailable.group(1)}"
+        )
+    flops_line = next(
+        (line.strip() for line in text.splitlines() if "flops_fvcore" in line),
+        "<not found>",
+    )
+    raise RuntimeError(
+        "Failed to parse flops_fvcore_G from command output. "
+        f"Raw flops line: {flops_line}"
+    )
+
+
 def _theoretical_from_run(
     run_name: str,
     device: str,
@@ -87,7 +111,7 @@ def _theoretical_from_run(
     out = _run(cmd)
 
     params_text = _extract_or_raise(PARAMS_RE, out, "params_total")
-    theory_text = _extract_or_raise(FLOPS_THEORY_RE, out, "flops_fvcore_G")
+    theory_text = _extract_theory_or_raise(out)
     return int(params_text.replace(",", "")), float(theory_text)
 
 

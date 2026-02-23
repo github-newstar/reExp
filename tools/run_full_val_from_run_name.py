@@ -98,6 +98,32 @@ def main():
             "saved/<run_name>/. If not set, auto-select best checkpoint in run dir."
         ),
     )
+    parser.add_argument(
+        "--partition",
+        default="val",
+        choices=["val", "test"],
+        help="Which partition to evaluate (default: val).",
+    )
+    parser.add_argument(
+        "--val-ratio",
+        type=float,
+        default=None,
+        help="Optional override for datasets.*.val_ratio.",
+    )
+    parser.add_argument(
+        "--test-ratio",
+        type=float,
+        default=None,
+        help="Optional override for datasets.*.test_ratio.",
+    )
+    parser.add_argument(
+        "--last-20-as-val",
+        action="store_true",
+        help=(
+            "Override split to three_way with val_ratio=0.2 and test_ratio=0.0, "
+            "then evaluate on val partition."
+        ),
+    )
     args = parser.parse_args()
 
     run_dir = ROOT_PATH / args.save_root / args.run_name
@@ -116,6 +142,36 @@ def main():
     config = OmegaConf.load(config_path)
 
     OmegaConf.set_struct(config, False)
+    if args.last_20_as_val:
+        args.partition = "val"
+        args.val_ratio = 0.2
+        args.test_ratio = 0.0
+
+    if args.val_ratio is not None and not (0.0 <= float(args.val_ratio) < 1.0):
+        raise ValueError(f"--val-ratio must be in [0, 1), got {args.val_ratio}")
+    if args.test_ratio is not None and not (0.0 <= float(args.test_ratio) < 1.0):
+        raise ValueError(f"--test-ratio must be in [0, 1), got {args.test_ratio}")
+    if (
+        args.val_ratio is not None
+        and args.test_ratio is not None
+        and float(args.val_ratio) + float(args.test_ratio) >= 1.0
+    ):
+        raise ValueError(
+            f"--val-ratio + --test-ratio must be < 1, got {args.val_ratio + args.test_ratio}"
+        )
+
+    datasets_cfg = config.get("datasets", {})
+    for split_name in ("train", "val", "test"):
+        split_cfg = datasets_cfg.get(split_name)
+        if split_cfg is None:
+            continue
+        if args.val_ratio is not None:
+            split_cfg.split_strategy = "three_way"
+            split_cfg.val_ratio = float(args.val_ratio)
+        if args.test_ratio is not None:
+            split_cfg.split_strategy = "three_way"
+            split_cfg.test_ratio = float(args.test_ratio)
+
     # Enforce single-process validation and full sliding-window eval.
     if config.trainer.get("ddp") is None:
         config.trainer.ddp = {}
@@ -123,7 +179,7 @@ def main():
     config.trainer.ddp.distributed_eval = False
     config.trainer.resume_from = None
     config.trainer.override = False
-    config.trainer.eval_partitions = ["val"]
+    config.trainer.eval_partitions = [str(args.partition)]
     config.trainer.use_sliding_window_inference = True
     config.trainer.validation_policy = {"enabled": False}
     config.trainer.dynamic_eval = {"enabled": False}
@@ -144,6 +200,13 @@ def main():
     logger.info("Loading run config: %s", config_path)
     logger.info("Using checkpoint: %s", checkpoint_path)
     logger.info("Device: %s", device)
+    logger.info("Evaluation partition: %s", args.partition)
+    if args.val_ratio is not None or args.test_ratio is not None:
+        logger.info(
+            "Split override: val_ratio=%s test_ratio=%s",
+            args.val_ratio,
+            args.test_ratio,
+        )
 
     dataloaders, batch_transforms = get_dataloaders(
         config=config,
@@ -153,9 +216,10 @@ def main():
         world_size=1,
         distributed_eval=False,
     )
-    if "val" not in dataloaders:
+    part = str(args.partition)
+    if part not in dataloaders:
         raise ValueError(
-            f"'val' dataloader not found in config datasets: {list(dataloaders.keys())}"
+            f"'{part}' dataloader not found in config datasets: {list(dataloaders.keys())}"
         )
 
     model = instantiate(config.model).to(device)
@@ -192,14 +256,15 @@ def main():
 
     logs = trainer._evaluation_epoch(
         epoch=0,
-        part="val",
-        dataloader=dataloaders["val"],
+        part=part,
+        dataloader=dataloaders[part],
         eval_mode="full",
         max_batches=None,
     )
 
     print("\n=== Full SW Validation Results ===")
     print(f"run_name: {args.run_name}")
+    print(f"partition: {part}")
     print(f"checkpoint: {checkpoint_path.name}")
     for key in sorted(logs.keys()):
         print(f"{key}: {logs[key]}")
