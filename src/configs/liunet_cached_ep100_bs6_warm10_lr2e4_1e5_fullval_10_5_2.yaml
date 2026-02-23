@@ -18,14 +18,17 @@ writer:
 
 datasets:
   train:
+    cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
     split_strategy: "three_way"
     val_ratio: 0.1
     test_ratio: 0.2
   val:
+    cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
     split_strategy: "three_way"
     val_ratio: 0.1
     test_ratio: 0.2
   test:
+    cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
     split_strategy: "three_way"
     val_ratio: 0.1
     test_ratio: 0.2
