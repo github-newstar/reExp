@@ -24,7 +24,11 @@ from src.model.lgmamba_fsde import (
     LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaSkip123DIDCFreqNet,
 )
 from src.model.lgmambanet import LGMambaNet
-from src.model.liunet import LIUNet3D, LIUNet3DDepthwiseSeparable
+from src.model.liunet import (
+    LIUNet3D,
+    LIUNet3DDepthwiseSeparable,
+    LIUNet3DECAC3TriMambaBottleneck,
+)
 from src.model.lmambanet import LMambaNet
 from src.model.no_new_net import NoNewNet
 from src.model.swin_unetr import SwinUNETRSegModel
@@ -56,6 +60,7 @@ __all__ = [
     "LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaSkip123DIDCFreqNet",
     "LGMambaNet",
     "LIUNet3D",
+    "LIUNet3DECAC3TriMambaBottleneck",
     "LIUNet3DDepthwiseSeparable",
     "LMambaNet",
     "NoNewNet",
