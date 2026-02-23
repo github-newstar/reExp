@@ -17,6 +17,7 @@ from src.model.lgmambanet import (
     GTSMambaBottleneckTriMambaECATriMambaECA,
     GTSMambaBottleneckTriMambaECATriMambaECAShared,
     GTSMambaBottleneckECAC3TriMambaECAC3TriMamba,
+    TriOrientMamba3D,
 )
 from src.model.lmambanet import DIDCBlock
 
@@ -148,6 +149,141 @@ class LightFSDEBlock(nn.Module):
         # 3) Gated residual enhancement (frequency-guided spatial boosting).
         out = x_spatial * (1.0 + attention_map)
         return out
+
+
+class FrequencyGate3D(nn.Module):
+    """
+    Frequency-derived gate map for 3D tensors.
+    Output shape: (B, 1, D, H, W), value in (0, 1).
+    """
+
+    def __init__(self, channels: int):
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        self.channels = channels
+
+        weight_ri = torch.zeros(1, 1, 8, 8, 8, 2)
+        weight_ri[..., 0] = 1.0
+        self.small_weight = nn.Parameter(weight_ri)
+
+        self.gate_conv = nn.Conv3d(channels, 1, kernel_size=1, bias=True)
+        self.gate_act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[1] != self.channels:
+            raise ValueError(
+                f"FrequencyGate3D channel mismatch: expected {self.channels}, got {x.shape[1]}"
+            )
+        x_fft_in = x.float()
+        spectrum = torch.fft.rfftn(x_fft_in, dim=(2, 3, 4))
+        _, _, d, h, w_freq = spectrum.shape
+
+        small_ri = self.small_weight.permute(0, 1, 5, 2, 3, 4).reshape(1, 2, 8, 8, 8)
+        up_ri = F.interpolate(
+            small_ri,
+            size=(d, h, w_freq),
+            mode="trilinear",
+            align_corners=False,
+        )
+        up_ri = up_ri.reshape(1, 1, 2, d, h, w_freq).permute(0, 1, 3, 4, 5, 2)
+        complex_weight = torch.view_as_complex(up_ri.contiguous())
+        modulated = spectrum * complex_weight
+
+        freq_back = torch.fft.irfftn(modulated, s=x.shape[2:], dim=(2, 3, 4))
+        freq_back = freq_back.to(dtype=x.dtype)
+        gate = self.gate_act(self.gate_conv(freq_back))
+        return gate
+
+
+class DIDCFrequencyGatedSkipBlock(nn.Module):
+    """
+    Skip block: DIDC followed by frequency-gated fusion.
+    """
+
+    def __init__(self, channels: int, use_channel_shuffle: bool = True):
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        self.channels = channels
+        self.didc = DIDCBlock(
+            in_channels=channels,
+            out_channels=channels,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+        self.freq_gate = FrequencyGate3D(channels=channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[1] != self.channels:
+            raise ValueError(
+                "DIDCFrequencyGatedSkipBlock channel mismatch: "
+                f"expected {self.channels}, got {x.shape[1]}"
+            )
+        feat = self.didc(x)
+        gate = self.freq_gate(feat)
+        return feat * (1.0 + gate)
+
+
+class DIDCC3TriMambaFrequencyFusionSkipBlock(nn.Module):
+    """
+    Skip block with two branches:
+    - branch A: DIDC
+    - branch B: C/3 TriOrientMamba3D
+    Then frequency-gated fusion.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        self.channels = channels
+
+        self.didc = DIDCBlock(
+            in_channels=channels,
+            out_channels=channels,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+
+        tri_channels = max((channels + 2) // 3, 1)
+        self.reduce = nn.Conv3d(channels, tri_channels, kernel_size=1, bias=False)
+        self.tri_mamba = TriOrientMamba3D(
+            channels=tri_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            share_mamba=False,
+        )
+        self.expand = nn.Conv3d(tri_channels, channels, kernel_size=1, bias=False)
+
+        self.fuse = nn.Sequential(
+            nn.Conv3d(channels * 2, channels, kernel_size=1, bias=False),
+            nn.InstanceNorm3d(channels),
+            nn.SiLU(inplace=True),
+        )
+        self.freq_gate = FrequencyGate3D(channels=channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[1] != self.channels:
+            raise ValueError(
+                "DIDCC3TriMambaFrequencyFusionSkipBlock channel mismatch: "
+                f"expected {self.channels}, got {x.shape[1]}"
+            )
+        didc_feat = self.didc(x)
+
+        tri_feat = self.reduce(x)
+        tri_feat = self.tri_mamba(tri_feat)
+        tri_feat = self.expand(tri_feat)
+
+        fused = self.fuse(torch.cat([didc_feat, tri_feat], dim=1))
+        gate = self.freq_gate(fused)
+        return fused * (1.0 + gate)
 
 
 class LGMambaLightFSDENet(nn.Module):
@@ -1048,6 +1184,60 @@ class LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaNet(
         c4 = int(feature_channels[3])
         self.bottleneck = GTSMambaBottleneckECAC3TriMambaECAC3TriMamba(
             channels=c4,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+
+
+class LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaSkip123DIDCFreqNet(
+    LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaNet
+):
+    """
+    Variant with customized skip blocks:
+    1) skip1: pure DIDC
+    2) skip2: DIDC + frequency gate fusion
+    3) skip3: DIDC branch || C/3-3TriMamba branch, then frequency fusion
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        feature_channels: tuple[int, int, int, int] = (32, 64, 128, 256),
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        deep_supervision: bool = True,
+        use_channel_shuffle_deep: bool = True,
+        dynamic_eval=None,
+        **_unused_kwargs,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_channels=feature_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            deep_supervision=deep_supervision,
+            use_channel_shuffle_deep=use_channel_shuffle_deep,
+            dynamic_eval=dynamic_eval,
+        )
+        c1, c2, c3, _ = feature_channels
+
+        self.skip_fsde1 = DIDCBlock(
+            in_channels=int(c1),
+            out_channels=int(c1),
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+        self.skip_fsde2 = DIDCFrequencyGatedSkipBlock(
+            channels=int(c2),
+            use_channel_shuffle=self.use_channel_shuffle,
+        )
+        self.skip_fsde3 = DIDCC3TriMambaFrequencyFusionSkipBlock(
+            channels=int(c3),
             mamba_state=mamba_state,
             mamba_conv=mamba_conv,
             mamba_expand=mamba_expand,

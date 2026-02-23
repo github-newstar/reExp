@@ -69,112 +69,36 @@ def _pick_metric_indices(header: list[str]) -> tuple[int | None, int | None]:
     return name_idx, value_idx
 
 
-def _extract_wide_metric_sums(rows: list[list[str]]) -> dict[str, float]:
-    if not rows:
-        return {}
-    header = [h.strip() for h in rows[0]]
-    if not header:
-        return {}
-
-    # Nsight "raw page" wide table: one kernel per row, one metric per column.
-    sum_suffix = ".sum"
-    smsp_pat = re.compile(r"^(?:smsp|sm)__sass_thread_inst_executed_op_.*_pred_on(?:\.sum)?$")
-    flop_pat = re.compile(r"^flop_count_.*(?:\.sum)?$")
-
-    metric_cols: list[tuple[int, str]] = []
-    for idx, col in enumerate(header):
-        col_name = col.strip()
-        if not col_name:
-            continue
-        if not (flop_pat.match(col_name) or smsp_pat.match(col_name)):
-            continue
-        if col_name.endswith(sum_suffix):
-            norm_name = col_name[: -len(sum_suffix)]
-            metric_cols.append((idx, norm_name))
-
-    # If no *.sum columns exist, fall back to raw metric columns.
-    if not metric_cols:
-        for idx, col in enumerate(header):
-            col_name = col.strip()
-            if flop_pat.match(col_name) or smsp_pat.match(col_name):
-                metric_cols.append((idx, col_name))
-
-    if not metric_cols:
-        return {}
-
-    sums: dict[str, float] = defaultdict(float)
-    for row in rows[1:]:
-        if not row:
-            continue
-        # Skip units row and non-data rows.
-        id_cell = row[0].strip() if row else ""
-        if id_cell and not id_cell.isdigit():
-            continue
-        for idx, name in metric_cols:
-            if idx >= len(row):
-                continue
-            value = _parse_float(row[idx])
-            if value is None:
-                continue
-            sums[name] += value
-    return dict(sums)
-
-
 def read_metric_sums(csv_path: Path) -> dict[str, float]:
     sums: dict[str, float] = defaultdict(float)
     metric_name_idx = None
     metric_value_idx = None
 
-    text = csv_path.read_text(encoding="utf-8", errors="ignore")
-    sample = text[:8192]
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
-    except csv.Error:
-        dialect = csv.excel
-
-    rows = list(csv.reader(text.splitlines(), dialect=dialect))
-    for row in rows:
-        if not row:
-            continue
-        # Nsight prefixes runtime log lines; skip them.
-        if row[0].startswith("==PROF=="):
-            continue
-
-        header_name_idx, header_value_idx = _pick_metric_indices(row)
-        if header_name_idx is not None and header_value_idx is not None:
-            metric_name_idx = header_name_idx
-            metric_value_idx = header_value_idx
-            continue
-
-        if metric_name_idx is None or metric_value_idx is None:
-            continue
-        if len(row) <= max(metric_name_idx, metric_value_idx):
-            continue
-
-        metric_name = row[metric_name_idx].strip()
-        metric_value = _parse_float(row[metric_value_idx])
-        if not metric_name or metric_value is None:
-            continue
-        sums[metric_name] += metric_value
-
-    # Some exports may not contain explicit metric columns in raw page.
-    # Fallback: detect "metric,value" two-column style rows.
-    if not sums:
-        metric_like = re.compile(
-            r"^(?:flop_count_|(?:sm|smsp)__sass_thread_inst_executed_op_)"
-        )
-        for row in rows:
-            if len(row) < 2:
+    with csv_path.open("r", encoding="utf-8", errors="ignore") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
                 continue
-            name = row[0].strip()
-            if not metric_like.match(name):
+            # Nsight prefixes runtime log lines; skip them.
+            if row[0].startswith("==PROF=="):
                 continue
-            value = _parse_float(row[1])
-            if value is not None:
-                sums[name] += value
 
-    if not sums:
-        sums = _extract_wide_metric_sums(rows)
+            # Header may appear multiple times in the same CSV.
+            if "Metric Name" in row and "Metric Value" in row:
+                metric_name_idx = row.index("Metric Name")
+                metric_value_idx = row.index("Metric Value")
+                continue
+
+            if metric_name_idx is None or metric_value_idx is None:
+                continue
+            if len(row) <= max(metric_name_idx, metric_value_idx):
+                continue
+
+            metric_name = row[metric_name_idx].strip()
+            metric_value = _parse_float(row[metric_value_idx])
+            if not metric_name or metric_value is None:
+                continue
+            sums[metric_name] += metric_value
 
     return dict(sums)
 

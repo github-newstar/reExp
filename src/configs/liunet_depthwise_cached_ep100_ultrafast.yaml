@@ -1,0 +1,45 @@
+defaults:
+  - brats23_swin_unetr_cached
+  - override model: liunet_depthwise
+  - _self_
+
+writer:
+  run_name: liunet_depthwise_cached_ep100_ultrafast_96
+
+datasets:
+  train:
+    usage_ratio: 1.0
+  val:
+    usage_ratio: 1.0
+
+dataloader:
+  batch_size: 2
+
+trainer:
+  n_epochs: 100
+  max_grad_norm: 3.0
+  warmup:
+    enabled: true
+    epochs: 10
+  validation_policy:
+    enabled: true
+    default_mode: quick
+    always_eval_epoch1: true
+    phases:
+      - max_epoch_ratio: 0.5
+        interval: 3
+        mode: quick
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: quick
+    full_eval:
+      enabled: true
+      interval: 0
+      epochs: [100]
+    post_training_full_eval:
+      enabled: true
+      top_k: 3
+      report_best_only: true
+  use_sliding_window_inference: true
+  sw_roi_size: [96, 96, 96]
+  sw_batch_size: 1
