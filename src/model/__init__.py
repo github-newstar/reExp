@@ -26,6 +26,7 @@ from src.model.lgmamba_fsde import (
 from src.model.lgmambanet import LGMambaNet
 from src.model.liunet import (
     LIUNet3D,
+    LIUNet3DDRBDMamba,
     LIUNet3DDepthwiseSeparable,
     LIUNet3DECAC3TriMambaBottleneck,
     LIUNet3DMKIR,
@@ -63,6 +64,7 @@ __all__ = [
     "LGMambaLightFSDEShallowSkip12NoECA_ECAC3TriMambaECAC3TriMambaSkip123DIDCFreqNet",
     "LGMambaNet",
     "LIUNet3D",
+    "LIUNet3DDRBDMamba",
     "LIUNet3DECAC3TriMambaBottleneck",
     "LIUNet3DDepthwiseSeparable",
     "LIUNet3DMKIR",
