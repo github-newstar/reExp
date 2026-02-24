@@ -1,6 +1,6 @@
 train:
   _target_: src.datasets.BraTS23CachedVectorDataset
-  cache_dir: "data/cached/brats23"
+  cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
   use_mmap: False
   cache_rate: 1.0
   partition: "train"
@@ -15,7 +15,7 @@ train:
 
 val:
   _target_: src.datasets.BraTS23CachedVectorDataset
-  cache_dir: "data/cached/brats23"
+  cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
   use_mmap: False
   cache_rate: 1.0
   partition: "val"
@@ -30,7 +30,7 @@ val:
 
 test:
   _target_: src.datasets.BraTS23CachedVectorDataset
-  cache_dir: "data/cached/brats23"
+  cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
   use_mmap: False
   cache_rate: 1.0
   partition: "test"
