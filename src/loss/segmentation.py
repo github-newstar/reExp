@@ -156,6 +156,32 @@ class DiceFocalSegLoss(nn.Module):
         }
 
 
+class DiceFocalSegLossWithDRBDCommit(DiceFocalSegLoss):
+    """
+    DiceFocalSegLoss + optional DRBD commitment regularization.
+
+    The model can provide `drbd_commit_loss` in forward outputs.
+    Final objective:
+      loss = dice_focal_total + drbd_aux_weight * drbd_commit_loss
+    """
+
+    def __init__(self, drbd_aux_weight=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.drbd_aux_weight = float(drbd_aux_weight)
+
+    def forward(self, logits, label, aux_logits=None, drbd_commit_loss=None, **batch):
+        output = super().forward(logits=logits, label=label, aux_logits=aux_logits, **batch)
+        drbd_loss = logits.new_tensor(0.0)
+        if drbd_commit_loss is not None:
+            if torch.is_tensor(drbd_commit_loss):
+                drbd_loss = drbd_commit_loss
+            else:
+                drbd_loss = logits.new_tensor(float(drbd_commit_loss))
+            output["loss"] = output["loss"] + self.drbd_aux_weight * drbd_loss
+        output["loss_drbd"] = drbd_loss.detach()
+        return output
+
+
 class GeneralizedDiceFocalSegLoss(nn.Module):
     """
     Generalized Dice Focal Loss (GDFL) inspired by:
