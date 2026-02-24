@@ -28,6 +28,7 @@ from src.model.liunet import (
     LIUNet3D,
     LIUNet3DDepthwiseSeparable,
     LIUNet3DECAC3TriMambaBottleneck,
+    LIUNet3DMKIR,
 )
 from src.model.lmambanet import LMambaNet
 from src.model.no_new_net import NoNewNet
@@ -62,6 +63,7 @@ __all__ = [
     "LIUNet3D",
     "LIUNet3DECAC3TriMambaBottleneck",
     "LIUNet3DDepthwiseSeparable",
+    "LIUNet3DMKIR",
     "LMambaNet",
     "NoNewNet",
     "SwinUNETRSegModel",
