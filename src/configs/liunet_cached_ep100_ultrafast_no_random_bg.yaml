@@ -1,0 +1,7 @@
+defaults:
+  - liunet_cached_ep100_ultrafast
+  - override transforms: brats23_cached_no_random_bg
+  - _self_
+
+writer:
+  run_name: liunet_cached_ep100_ultrafast_96_no_random_bg
