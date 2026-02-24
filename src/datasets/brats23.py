@@ -311,7 +311,10 @@ class BraTS23CachedVectorDataset(Dataset):
                 f"partition must be one of {{'train', 'val', 'test', 'all'}}, got {partition}"
             )
 
-        all_index = _read_cached_index(cache_dir=cache_dir)
+        self.cache_dir = Path(cache_dir).expanduser().resolve()
+        self.vector_root = self.cache_dir / "vectors"
+
+        all_index = _read_cached_index(cache_dir=self.cache_dir)
         selected_index = select_subset(index=all_index, usage_ratio=usage_ratio, seed=seed)
 
         if partition == "all":
@@ -400,6 +403,47 @@ class BraTS23CachedVectorDataset(Dataset):
     def __len__(self):
         return len(self._index)
 
+    def _resolve_vector_path(self, record):
+        """
+        Resolve vector path from index with backward-compatible fallbacks.
+        """
+        candidates = []
+        indexed_path = record.get("vector_path")
+        if isinstance(indexed_path, str) and indexed_path.strip():
+            raw_path = Path(indexed_path).expanduser()
+            if raw_path.is_absolute():
+                candidates.append(raw_path.resolve())
+            else:
+                candidates.append((self.cache_dir / raw_path).resolve())
+                candidates.append(raw_path.resolve())
+            candidates.append((self.vector_root / raw_path.name).resolve())
+
+        case_id = record.get("case_id")
+        if isinstance(case_id, str) and case_id:
+            candidates.append((self.vector_root / f"{case_id}.pt").resolve())
+
+        deduped = []
+        seen = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(path)
+
+        for path in deduped:
+            if path.exists():
+                return path
+
+        tried_paths = "\n".join(f"  - {path}" for path in deduped)
+        raise FileNotFoundError(
+            "Cached vector file not found.\n"
+            f"case_id={record.get('case_id', '<unknown>')}\n"
+            f"indexed vector_path={indexed_path}\n"
+            f"cache_dir={self.cache_dir}\n"
+            f"tried paths:\n{tried_paths}"
+        )
+
     def _load_payload(self, vector_path):
         """
         Load cached payload with backward compatibility for torch versions.
@@ -481,7 +525,7 @@ class BraTS23CachedVectorDataset(Dataset):
 
     def _load_raw(self, ind):
         record = self._index[ind]
-        vector_path = Path(record["vector_path"]).expanduser().resolve()
+        vector_path = self._resolve_vector_path(record)
         sample = self._load_payload(vector_path)
 
         image = self._to_plain_tensor(sample["image"])
