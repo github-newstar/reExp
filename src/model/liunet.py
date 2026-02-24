@@ -314,6 +314,7 @@ class LIUNet3D(nn.Module):
         current_channels = self.bottleneck.out_channels
 
         self.up_layers = nn.ModuleList()
+        self.up_proj_layers = nn.ModuleList()
         self.decoder_blocks = nn.ModuleList()
         for branch_filters, skip_ch in zip(
             reversed(encoder_branch_filters),
@@ -324,8 +325,16 @@ class LIUNet3D(nn.Module):
             else:
                 upsample = nn.Upsample(scale_factor=2, mode=upsample_mode)
             self.up_layers.append(upsample)
+            self.up_proj_layers.append(
+                nn.Conv3d(
+                    in_channels=current_channels,
+                    out_channels=skip_ch,
+                    kernel_size=1,
+                    bias=False,
+                )
+            )
 
-            decoder_in_channels = current_channels + skip_ch
+            decoder_in_channels = skip_ch
             decoder_block = InceptionBlock3D(
                 in_channels=decoder_in_channels,
                 branch_filters=branch_filters,
@@ -347,13 +356,15 @@ class LIUNet3D(nn.Module):
 
         x = self.bottleneck(x)
 
-        for upsample, decoder_block, skip in zip(
+        for upsample, up_proj, decoder_block, skip in zip(
             self.up_layers,
+            self.up_proj_layers,
             self.decoder_blocks,
             reversed(skip_features),
         ):
             x = upsample(x)
-            x = torch.cat([skip, x], dim=1)
+            x = up_proj(x)
+            x = x + skip
             x = decoder_block(x)
 
         logits = self.head(x)
