@@ -314,6 +314,104 @@ class LIUNet3D(nn.Module):
         current_channels = self.bottleneck.out_channels
 
         self.up_layers = nn.ModuleList()
+        self.decoder_blocks = nn.ModuleList()
+        for branch_filters, skip_ch in zip(
+            reversed(encoder_branch_filters),
+            reversed(skip_channels),
+        ):
+            if upsample_mode in {"trilinear"}:
+                upsample = nn.Upsample(scale_factor=2, mode=upsample_mode, align_corners=False)
+            else:
+                upsample = nn.Upsample(scale_factor=2, mode=upsample_mode)
+            self.up_layers.append(upsample)
+
+            decoder_in_channels = current_channels + skip_ch
+            decoder_block = InceptionBlock3D(
+                in_channels=decoder_in_channels,
+                branch_filters=branch_filters,
+                kernel_sizes=inception_kernel_sizes,
+            )
+            self.decoder_blocks.append(decoder_block)
+            current_channels = decoder_block.out_channels
+
+        self.head = nn.Conv3d(current_channels, out_channels, kernel_size=1)
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for encoder_block, pool in zip(self.encoder_blocks, self.pool_layers):
+            x = encoder_block(x)
+            skip_features.append(x)
+            x = pool(x)
+
+        x = self.bottleneck(x)
+
+        for upsample, decoder_block, skip in zip(
+            self.up_layers,
+            self.decoder_blocks,
+            reversed(skip_features),
+        ):
+            x = upsample(x)
+            x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+
+        logits = self.head(x)
+        return {"logits": logits}
+
+    def __str__(self) -> str:
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
+
+
+class LIUNet3DAddSkip(nn.Module):
+    """
+    LIU-Net variant using element-wise-add skip fusion.
+    Decoder features are projected by 1x1x1 conv before addition.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        bottleneck_branch_filters: int = 64,
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        upsample_mode: str = "nearest",
+    ):
+        super().__init__()
+        if len(encoder_branch_filters) != 4:
+            raise ValueError("LIU-Net expects four encoder levels: (4, 8, 16, 32).")
+
+        self.encoder_blocks = nn.ModuleList()
+        self.pool_layers = nn.ModuleList()
+        current_channels = in_channels
+        skip_channels: list[int] = []
+        for branch_filters in encoder_branch_filters:
+            block = InceptionBlock3D(
+                in_channels=current_channels,
+                branch_filters=branch_filters,
+                kernel_sizes=inception_kernel_sizes,
+            )
+            self.encoder_blocks.append(block)
+            self.pool_layers.append(nn.MaxPool3d(kernel_size=2, stride=2))
+            current_channels = block.out_channels
+            skip_channels.append(current_channels)
+
+        self.bottleneck = InceptionBlock3D(
+            in_channels=current_channels,
+            branch_filters=bottleneck_branch_filters,
+            kernel_sizes=inception_kernel_sizes,
+        )
+        current_channels = self.bottleneck.out_channels
+
+        self.up_layers = nn.ModuleList()
         self.up_proj_layers = nn.ModuleList()
         self.decoder_blocks = nn.ModuleList()
         for branch_filters, skip_ch in zip(
@@ -326,17 +424,11 @@ class LIUNet3D(nn.Module):
                 upsample = nn.Upsample(scale_factor=2, mode=upsample_mode)
             self.up_layers.append(upsample)
             self.up_proj_layers.append(
-                nn.Conv3d(
-                    in_channels=current_channels,
-                    out_channels=skip_ch,
-                    kernel_size=1,
-                    bias=False,
-                )
+                nn.Conv3d(current_channels, skip_ch, kernel_size=1, bias=False)
             )
 
-            decoder_in_channels = skip_ch
             decoder_block = InceptionBlock3D(
-                in_channels=decoder_in_channels,
+                in_channels=skip_ch,
                 branch_filters=branch_filters,
                 kernel_sizes=inception_kernel_sizes,
             )
