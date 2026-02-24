@@ -50,6 +50,8 @@ class DiceFocalSegLoss(nn.Module):
         squared_pred=False,
         smooth_nr=1e-5,
         smooth_dr=1e-5,
+        drbd_aux_weight=None,
+        **kwargs,
     ):
         super().__init__()
         self.dice_weight = float(dice_weight)
@@ -70,6 +72,9 @@ class DiceFocalSegLoss(nn.Module):
             smooth_dr=smooth_dr,
             weight=self.channel_weights,
         )
+        # Keep backward/forward compatibility for configs that include
+        # DRBD-specific fields when target is plain DiceFocalSegLoss.
+        _ = drbd_aux_weight, kwargs
 
     @staticmethod
     def _weighted_channel_reduce(

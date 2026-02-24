@@ -22,6 +22,7 @@ loss_function:
   focal_weight: 1.0
   gamma: 2.0
   alpha: null
+  drbd_aux_weight: null
 
 writer:
   loss_names: ["loss", "loss_dice", "loss_focal", "loss_ds"]
