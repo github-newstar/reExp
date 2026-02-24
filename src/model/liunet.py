@@ -474,6 +474,114 @@ class LIUNet3DMKIR(nn.Module):
         return info
 
 
+class LIUNet3DMKIRECAC3TriMambaBottleneck(nn.Module):
+    """
+    LIU-Net MKIR variant where only bottleneck is replaced by:
+    ECA -> C/3-3TriMamba -> ECA -> C/3-3TriMamba.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        mkir_expansion_ratio: int = 4,
+        mkir_activation: str = "relu6",
+        upsample_mode: str = "nearest",
+        mamba_state: int = 16,
+        mamba_conv: int = 4,
+        mamba_expand: int = 2,
+        use_channel_shuffle: bool = True,
+    ):
+        super().__init__()
+        if len(encoder_branch_filters) != 4:
+            raise ValueError("LIU-Net expects four encoder levels: (4, 8, 16, 32).")
+
+        self.encoder_blocks = nn.ModuleList()
+        self.pool_layers = nn.ModuleList()
+        current_channels = in_channels
+        skip_channels: list[int] = []
+        for branch_filters in encoder_branch_filters:
+            block = InvertedResidualMKIRBlock3D(
+                in_channels=current_channels,
+                branch_filters=branch_filters,
+                kernel_sizes=inception_kernel_sizes,
+                expansion_ratio=mkir_expansion_ratio,
+                activation=mkir_activation,
+            )
+            self.encoder_blocks.append(block)
+            self.pool_layers.append(nn.MaxPool3d(kernel_size=2, stride=2))
+            current_channels = block.out_channels
+            skip_channels.append(current_channels)
+
+        self.bottleneck = GTSMambaBottleneckECAC3TriMambaECAC3TriMamba(
+            channels=current_channels,
+            mamba_state=mamba_state,
+            mamba_conv=mamba_conv,
+            mamba_expand=mamba_expand,
+            use_channel_shuffle=use_channel_shuffle,
+        )
+
+        self.up_layers = nn.ModuleList()
+        self.decoder_blocks = nn.ModuleList()
+        for branch_filters, skip_ch in zip(
+            reversed(encoder_branch_filters),
+            reversed(skip_channels),
+        ):
+            if upsample_mode in {"trilinear"}:
+                upsample = nn.Upsample(scale_factor=2, mode=upsample_mode, align_corners=False)
+            else:
+                upsample = nn.Upsample(scale_factor=2, mode=upsample_mode)
+            self.up_layers.append(upsample)
+
+            decoder_in_channels = current_channels + skip_ch
+            decoder_block = InvertedResidualMKIRBlock3D(
+                in_channels=decoder_in_channels,
+                branch_filters=branch_filters,
+                kernel_sizes=inception_kernel_sizes,
+                expansion_ratio=mkir_expansion_ratio,
+                activation=mkir_activation,
+            )
+            self.decoder_blocks.append(decoder_block)
+            current_channels = decoder_block.out_channels
+
+        self.head = nn.Conv3d(current_channels, out_channels, kernel_size=1)
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for encoder_block, pool in zip(self.encoder_blocks, self.pool_layers):
+            x = encoder_block(x)
+            skip_features.append(x)
+            x = pool(x)
+
+        x = self.bottleneck(x)
+
+        for upsample, decoder_block, skip in zip(
+            self.up_layers,
+            self.decoder_blocks,
+            reversed(skip_features),
+        ):
+            x = upsample(x)
+            x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+
+        logits = self.head(x)
+        return {"logits": logits}
+
+    def __str__(self) -> str:
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
+
+
 class LIUNet3DECAC3TriMambaBottleneck(nn.Module):
     """
     Full LIU-Net variant where only the bottleneck is replaced by:
