@@ -4,6 +4,7 @@ from typing import Sequence
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from src.model.drbd_mamba import DRBDMambaBlock3D
 from src.model.lgmambanet import GTSMambaBottleneckECAC3TriMambaECAC3TriMamba
@@ -261,6 +262,126 @@ class InceptionDepthwiseSeparableBlock3D(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.cat([tower(x) for tower in self.towers], dim=1)
+
+
+def _group_norm_half_channels(channels: int) -> int:
+    if channels <= 1:
+        return 1
+    groups = max(1, channels // 2)
+    while channels % groups != 0 and groups > 1:
+        groups -= 1
+    return groups
+
+
+class _DoubleConv2DGNReLU(nn.Sequential):
+    def __init__(self, in_channels: int, out_channels: int):
+        groups = _group_norm_half_channels(out_channels)
+        super().__init__(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=True),
+            nn.GroupNorm(groups, out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=True),
+            nn.GroupNorm(groups, out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+
+class _Down2D(nn.Sequential):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__(
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            _DoubleConv2DGNReLU(in_channels, out_channels),
+        )
+
+
+class _Up2D(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        if in_channels % 2 != 0:
+            raise ValueError(
+                f"uC upsample expects even channels for ConvTranspose2d, got {in_channels}."
+            )
+        self.up = nn.ConvTranspose2d(
+            in_channels, in_channels // 2, kernel_size=2, stride=2
+        )
+        self.conv = _DoubleConv2DGNReLU(in_channels, out_channels)
+
+    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        x = self.up(x)
+        diff_y = skip.size(2) - x.size(2)
+        diff_x = skip.size(3) - x.size(3)
+        x = F.pad(
+            x,
+            [diff_x // 2, diff_x - diff_x // 2, diff_y // 2, diff_y - diff_y // 2],
+        )
+        x = torch.cat([skip, x], dim=1)
+        return self.conv(x)
+
+
+class _USkipUNet2D(nn.Module):
+    """
+    Simplified 2D U-Net used by uC (no stem/out head, only down/up path).
+    """
+
+    def __init__(self, channels: Sequence[int]):
+        super().__init__()
+        if len(channels) < 2:
+            raise ValueError("uC channels must contain at least two levels.")
+
+        self.downs = nn.ModuleList()
+        self.ups = nn.ModuleList()
+
+        in_channels = channels[0]
+        for feature in channels[1:]:
+            self.downs.append(_Down2D(in_channels, feature))
+            in_channels = feature
+
+        for feature in reversed(channels[:-1]):
+            self.ups.append(_Up2D(in_channels, feature))
+            in_channels = feature
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        skips: list[torch.Tensor] = []
+        for down in self.downs:
+            skips.append(x)
+            x = down(x)
+        for up, skip in zip(self.ups, reversed(skips)):
+            x = up(x, skip)
+        return x
+
+
+class _UShapedConnectionSkip3D(nn.Module):
+    """
+    uC skip from the paper: run simplified 2D U-Net on stacked axial slices.
+    """
+
+    def __init__(self, channels: Sequence[int]):
+        super().__init__()
+        self.unet2d = _USkipUNet2D(channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, d, h, w = x.shape
+        x_2d = x.permute(0, 4, 1, 2, 3).reshape(b * w, c, d, h)
+        x_2d = self.unet2d(x_2d)
+        return x_2d.reshape(b, w, c, d, h).permute(0, 2, 3, 4, 1).contiguous()
+
+
+class _DFi3D(nn.Module):
+    """
+    Dual Feature Integration from the paper.
+    """
+
+    def __init__(self, channels: int):
+        super().__init__()
+        self.fuse = nn.Conv3d(channels * 2, channels, kernel_size=1, bias=False)
+        self.att1 = nn.Conv3d(channels, 1, kernel_size=1, bias=True)
+        self.att2 = nn.Conv3d(channels, 1, kernel_size=1, bias=True)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        fused = self.fuse(torch.cat([x1, x2], dim=1))
+        att = self.att1(x1) + self.att2(x2)
+        return fused * self.sigmoid(att)
 
 
 class AdditiveAttentionGate3D(nn.Module):
@@ -1446,6 +1567,164 @@ class LIUNet3DDepthwiseSeparable(nn.Module):
         ):
             x = upsample(x)
             x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+
+        logits = self.head(x)
+        return {"logits": logits}
+
+    def __str__(self) -> str:
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
+
+
+class LIUNet3DUCDFi(nn.Module):
+    """
+    LIU-Net variant following uC-3DU-Net:
+    - replace skip1/2/3 with uC modules
+    - use DFi on the first three decoder fusion stages
+    - keep the final decoder stage as regular concat + Inception decoding
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        bottleneck_branch_filters: int = 64,
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        upsample_mode: str = "nearest",
+    ):
+        super().__init__()
+        if len(encoder_branch_filters) != 4:
+            raise ValueError("LIU-Net expects four encoder levels: (4, 8, 16, 32).")
+
+        self.encoder_blocks = nn.ModuleList()
+        self.pool_layers = nn.ModuleList()
+        current_channels = in_channels
+        skip_channels: list[int] = []
+        for branch_filters in encoder_branch_filters:
+            block = InceptionBlock3D(
+                in_channels=current_channels,
+                branch_filters=branch_filters,
+                kernel_sizes=inception_kernel_sizes,
+            )
+            self.encoder_blocks.append(block)
+            self.pool_layers.append(nn.MaxPool3d(kernel_size=2, stride=2))
+            current_channels = block.out_channels
+            skip_channels.append(current_channels)
+
+        self.bottleneck = InceptionBlock3D(
+            in_channels=current_channels,
+            branch_filters=bottleneck_branch_filters,
+            kernel_sizes=inception_kernel_sizes,
+        )
+        bottleneck_channels = self.bottleneck.out_channels
+        current_channels = bottleneck_channels
+
+        self.uc_skip1 = _UShapedConnectionSkip3D(
+            channels=(
+                skip_channels[0],
+                skip_channels[1],
+                skip_channels[2],
+                skip_channels[3],
+                bottleneck_channels,
+            )
+        )
+        self.uc_skip2 = _UShapedConnectionSkip3D(
+            channels=(
+                skip_channels[1],
+                skip_channels[2],
+                skip_channels[3],
+                bottleneck_channels,
+            )
+        )
+        self.uc_skip3 = _UShapedConnectionSkip3D(
+            channels=(skip_channels[2], skip_channels[3], bottleneck_channels)
+        )
+
+        self.up_layers = nn.ModuleList()
+        self.up_proj_layers = nn.ModuleList()
+        self.dfi_layers = nn.ModuleList()
+        self.decoder_blocks = nn.ModuleList()
+        for stage_idx, (branch_filters, skip_ch) in enumerate(
+            zip(reversed(encoder_branch_filters), reversed(skip_channels))
+        ):
+            if upsample_mode in {"trilinear"}:
+                upsample = nn.Upsample(
+                    scale_factor=2, mode=upsample_mode, align_corners=False
+                )
+            else:
+                upsample = nn.Upsample(scale_factor=2, mode=upsample_mode)
+            self.up_layers.append(upsample)
+
+            if stage_idx < 3:
+                self.up_proj_layers.append(
+                    nn.Conv3d(current_channels, skip_ch, kernel_size=1, bias=False)
+                )
+                self.dfi_layers.append(_DFi3D(skip_ch))
+                decoder_in_channels = skip_ch
+            else:
+                self.up_proj_layers.append(nn.Identity())
+                decoder_in_channels = current_channels + skip_ch
+
+            decoder_block = InceptionBlock3D(
+                in_channels=decoder_in_channels,
+                branch_filters=branch_filters,
+                kernel_sizes=inception_kernel_sizes,
+            )
+            self.decoder_blocks.append(decoder_block)
+            current_channels = decoder_block.out_channels
+
+        self.head = nn.Conv3d(current_channels, out_channels, kernel_size=1)
+
+    @staticmethod
+    def _resize_to_match(x: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if x.shape[-3:] != target.shape[-3:]:
+            return F.interpolate(
+                x, size=target.shape[-3:], mode="trilinear", align_corners=False
+            )
+        return x
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for encoder_block, pool in zip(self.encoder_blocks, self.pool_layers):
+            x = encoder_block(x)
+            skip_features.append(x)
+            x = pool(x)
+
+        # Replace skip1/2/3 by uC skip features; keep the deepest skip unchanged.
+        skip_features[0] = self.uc_skip1(skip_features[0])
+        skip_features[1] = self.uc_skip2(skip_features[1])
+        skip_features[2] = self.uc_skip3(skip_features[2])
+
+        x = self.bottleneck(x)
+
+        for stage_idx, (upsample, up_proj, decoder_block, skip) in enumerate(
+            zip(
+                self.up_layers,
+                self.up_proj_layers,
+                self.decoder_blocks,
+                reversed(skip_features),
+            )
+        ):
+            x = upsample(x)
+            x = self._resize_to_match(x, skip)
+
+            if stage_idx < 3:
+                x = up_proj(x)
+                x = self._resize_to_match(x, skip)
+                x = self.dfi_layers[stage_idx](x, skip)
+            else:
+                x = torch.cat([skip, x], dim=1)
+
             x = decoder_block(x)
 
         logits = self.head(x)
