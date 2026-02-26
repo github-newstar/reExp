@@ -68,8 +68,6 @@ def _build_train_cmd(
     lr_policy: str,
 ) -> list[str]:
     cmd = [
-        "uv",
-        "run",
         "python",
         "train.py",
         "--config-path",
