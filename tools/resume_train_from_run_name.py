@@ -85,7 +85,9 @@ def _build_train_cmd(
     if lr_policy == "constant":
         cmd.extend(
             [
-                "lr_scheduler=null",
+                "lr_scheduler._target_=torch.optim.lr_scheduler.CosineAnnealingLR",
+                f"lr_scheduler.T_max={target_n_epochs}",
+                f"lr_scheduler.eta_min={lr}",
                 "trainer.warmup.enabled=false",
             ]
         )
