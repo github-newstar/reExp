@@ -4,6 +4,7 @@ import warnings
 from typing import Sequence
 
 import torch
+import torch.multiprocessing as mp
 import torch.nn.functional as F
 from monai.transforms import MapTransform
 from torch.utils.data import get_worker_info
@@ -248,6 +249,7 @@ class RandGliGanInsertd(MapTransform):
         generator_feature_size: int = 48,
         generator_use_checkpoint: bool = False,
         generator_device: str = "cpu",
+        worker_cuda_strategy: str = "round_robin",
         ckpt_t2f: str = "",
         ckpt_t1c: str = "",
         ckpt_t1n: str = "",
@@ -308,6 +310,12 @@ class RandGliGanInsertd(MapTransform):
         self.generator_feature_size = int(generator_feature_size)
         self.generator_use_checkpoint = self._as_bool(generator_use_checkpoint)
         self.generator_device = str(generator_device)
+        self.worker_cuda_strategy = str(worker_cuda_strategy or "round_robin").strip().lower()
+        if self.worker_cuda_strategy not in {"round_robin", "fixed"}:
+            raise ValueError(
+                "worker_cuda_strategy must be one of {'round_robin', 'fixed'}, "
+                f"got {worker_cuda_strategy!r}"
+            )
 
         self.ckpt_t2f = str(ckpt_t2f or "")
         self.ckpt_t1c = str(ckpt_t1c or "")
@@ -327,6 +335,7 @@ class RandGliGanInsertd(MapTransform):
         self._synthesizer = None
         self._label_sampler = None
         self._warned_cuda_worker = False
+        self._warned_worker_cuda_mapping = False
 
     @staticmethod
     def _as_bool(value) -> bool:
@@ -412,15 +421,48 @@ class RandGliGanInsertd(MapTransform):
         desired = self.generator_device.lower()
         worker = get_worker_info()
         if worker is not None and desired.startswith("cuda"):
-            if not self._warned_cuda_worker:
+            mp_start = mp.get_start_method(allow_none=True)
+            if mp_start not in {"spawn", "forkserver"}:
+                if not self._warned_cuda_worker:
+                    warnings.warn(
+                        "RandGliGanInsertd detected generator_device=cuda inside DataLoader worker "
+                        f"with multiprocessing start method={mp_start!r}. "
+                        "CUDA worker inference requires 'spawn' or 'forkserver'; "
+                        "falling back generator_device to cpu. "
+                        "Set dataloader.multiprocessing_context=spawn to enable GPU synthesis.",
+                        stacklevel=2,
+                    )
+                    self._warned_cuda_worker = True
+                return "cpu"
+
+            if not torch.cuda.is_available():
+                if not self._warned_cuda_worker:
+                    warnings.warn(
+                        "generator_device=cuda was requested but CUDA is unavailable. "
+                        "Falling back to cpu.",
+                        stacklevel=2,
+                    )
+                    self._warned_cuda_worker = True
+                return "cpu"
+
+            # If user pins an explicit GPU index (e.g. cuda:1), keep it.
+            if ":" in desired:
+                return self.generator_device
+
+            n_gpu = max(1, int(torch.cuda.device_count()))
+            if self.worker_cuda_strategy == "fixed" or n_gpu == 1:
+                mapped = "cuda:0"
+            else:
+                mapped = f"cuda:{int(worker.id) % n_gpu}"
+
+            if not self._warned_worker_cuda_mapping:
                 warnings.warn(
-                    "RandGliGanInsertd is running inside DataLoader worker. "
-                    "Falling back generator_device to cpu for stability. "
-                    "Use dataloader.num_workers=0 to keep CUDA synthesis.",
+                    "RandGliGanInsertd is using CUDA inside DataLoader workers "
+                    f"(strategy={self.worker_cuda_strategy}, mapped_device={mapped}).",
                     stacklevel=2,
                 )
-                self._warned_cuda_worker = True
-            return "cpu"
+                self._warned_worker_cuda_mapping = True
+            return mapped
         return self.generator_device
 
     def _ensure_runtime(self):

@@ -5,3 +5,7 @@ defaults:
 
 writer:
   run_name: liunet_cached_ep100_ultrafast_96_gligan_dynamic
+
+dataloader:
+  persistent_workers: true
+  multiprocessing_context: spawn

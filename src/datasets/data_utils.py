@@ -141,6 +141,7 @@ def get_dataloaders(
         if num_workers == 0:
             tuned.pop("prefetch_factor", None)
             tuned["persistent_workers"] = False
+            tuned.pop("multiprocessing_context", None)
             return tuned
 
         prefetch_factor = int(tuned.get("prefetch_factor", 2))
@@ -172,6 +173,7 @@ def get_dataloaders(
                 if num_workers == 0:
                     tuned.pop("prefetch_factor", None)
                     tuned["persistent_workers"] = False
+                    tuned.pop("multiprocessing_context", None)
                     prefetch_factor = 1
 
             est = _estimate_inflight_bytes(

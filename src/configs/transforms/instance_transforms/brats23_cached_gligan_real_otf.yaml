@@ -27,6 +27,7 @@ train:
       generator_feature_size: 48
       generator_use_checkpoint: false
       generator_device: "${oc.env:GLIGAN_DEVICE,cpu}"
+      worker_cuda_strategy: "${oc.env:GLIGAN_WORKER_CUDA_STRATEGY,round_robin}"
       ckpt_t2f: "${oc.env:GLIGAN_CKPT_T2F,pretrained/gligan/weights/brats2023/flair/generator_400000.pt}"
       ckpt_t1c: "${oc.env:GLIGAN_CKPT_T1C,pretrained/gligan/weights/brats2023/t1ce/generator_400000.pt}"
       ckpt_t1n: "${oc.env:GLIGAN_CKPT_T1N,pretrained/gligan/weights/brats2023/t1/generator_400000.pt}"
