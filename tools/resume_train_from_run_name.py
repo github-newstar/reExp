@@ -65,8 +65,9 @@ def _build_train_cmd(
     lr: float,
     batch_size: int,
     max_grad_norm: float,
+    lr_policy: str,
 ) -> list[str]:
-    return [
+    cmd = [
         "uv",
         "run",
         "python",
@@ -83,8 +84,17 @@ def _build_train_cmd(
         f"optimizer.lr={lr}",
         f"dataloader.batch_size={batch_size}",
         f"trainer.max_grad_norm={max_grad_norm}",
-        f"lr_scheduler.T_max={target_n_epochs}",
     ]
+    if lr_policy == "constant":
+        cmd.extend(
+            [
+                "lr_scheduler=null",
+                "trainer.warmup.enabled=false",
+            ]
+        )
+    else:
+        raise ValueError(f"Unsupported --lr-policy: {lr_policy}")
+    return cmd
 
 
 def main() -> None:
@@ -123,6 +133,12 @@ def main() -> None:
         type=float,
         default=1.0,
         help="Override trainer.max_grad_norm (default: 1.0).",
+    )
+    parser.add_argument(
+        "--lr-policy",
+        default="constant",
+        choices=["constant"],
+        help="LR policy for resumed stage (default: constant).",
     )
     parser.add_argument(
         "--dry-run",
@@ -164,6 +180,7 @@ def main() -> None:
         lr=float(args.lr),
         batch_size=int(args.batch_size),
         max_grad_norm=float(args.max_grad_norm),
+        lr_policy=str(args.lr_policy),
     )
 
     print(f"run_dir: {run_dir}")
@@ -171,6 +188,7 @@ def main() -> None:
     print(f"checkpoint_epoch: {checkpoint_epoch}")
     print(f"extra_epochs: {args.extra_epochs}")
     print(f"target_n_epochs: {target_n_epochs}")
+    print(f"lr_policy: {args.lr_policy}")
     print("command:")
     print(" ".join(cmd))
 
