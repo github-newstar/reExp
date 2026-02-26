@@ -1,0 +1,33 @@
+train:
+  _target_: monai.transforms.Compose
+  transforms:
+    - _target_: monai.transforms.EnsureTyped
+      keys: ["image", "label"]
+      track_meta: false
+    - _target_: src.transforms.RandETFocusedCropd
+      keys: ["image", "label"]
+      roi_size: [32, 32, 32]
+      label_key: "label"
+      et_channel: 2
+      wt_channel: 1
+      et_focus_prob: 0.7
+      random_prob: 0.33
+    - _target_: src.transforms.RandGliPseudoInsertd
+      keys: ["image", "label"]
+      prob: 0.6
+      max_insertions: 2
+      second_insertion_prob: 0.4
+      lesion_scale_range: [0.3, 0.8]
+      class_probs: [0.3, 0.4, 0.3]
+      intensity_delta_range: [-0.1, 0.2]
+      noise_std: 0.03
+    - _target_: monai.transforms.EnsureTyped
+      keys: ["image", "label"]
+      track_meta: false
+
+inference:
+  _target_: monai.transforms.Compose
+  transforms:
+    - _target_: monai.transforms.EnsureTyped
+      keys: ["image", "label"]
+      track_meta: false

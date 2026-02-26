@@ -1,0 +1,7 @@
+defaults:
+  - liunet_cached_ep100_ultrafast
+  - override transforms: brats23_cached_gli_otf
+  - _self_
+
+writer:
+  run_name: liunet_cached_ep100_ultrafast_96_gli_otf

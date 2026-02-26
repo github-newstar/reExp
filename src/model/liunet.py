@@ -419,6 +419,57 @@ class AdditiveAttentionGate3D(nn.Module):
         return x * attention
 
 
+class USGLKSkip3D(nn.Module):
+    """
+    USG-LK skip refinement:
+    1) uncertainty perceiver via 1x1x1 conv + sigmoid
+    2) entropy-based uncertainty map U = -P * log(P + eps)
+    3) soft sparse gate G = sigmoid((U - tau) / gamma)
+    4) 7x7x7 depthwise repair on gated features
+    5) residual fusion F_out = F + alpha * F_repaired
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        large_kernel_size: int = 7,
+        gate_temperature: float = 0.1,
+        init_tau: float = 0.5,
+        init_alpha: float = 1.0,
+        eps: float = 1e-6,
+    ):
+        super().__init__()
+        if large_kernel_size % 2 == 0:
+            raise ValueError("large_kernel_size must be odd to preserve spatial shape.")
+        if gate_temperature <= 0:
+            raise ValueError(f"gate_temperature must be > 0, got {gate_temperature}.")
+        if eps <= 0:
+            raise ValueError(f"eps must be > 0, got {eps}.")
+
+        self.uncertainty_proj = nn.Conv3d(channels, 1, kernel_size=1, bias=True)
+        self.repair = nn.Conv3d(
+            channels,
+            channels,
+            kernel_size=large_kernel_size,
+            padding=large_kernel_size // 2,
+            groups=channels,
+            bias=False,
+        )
+        self.tau = nn.Parameter(torch.tensor(float(init_tau)))
+        self.alpha = nn.Parameter(torch.tensor(float(init_alpha)))
+        self.gate_temperature = float(gate_temperature)
+        self.eps = float(eps)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        probability = torch.sigmoid(self.uncertainty_proj(x))
+        uncertainty = -(probability * torch.log(probability + self.eps))
+        gate = torch.sigmoid((uncertainty - self.tau) / self.gate_temperature)
+        sparse = gate * x
+        repaired = self.repair(sparse)
+        return x + self.alpha * repaired
+
+
 class LIUNet3D(nn.Module):
     """
     Reproduction of LIU-Net (PeerJ CS 2025, cs-2787):
@@ -524,6 +575,83 @@ class LIUNet3D(nn.Module):
         info += f"\nAll parameters: {all_parameters}"
         info += f"\nTrainable parameters: {trainable_parameters}"
         return info
+
+
+class LIUNet3DUSGLK(LIUNet3D):
+    """
+    Original LIU-Net with USG-LK skip replacement on selected encoder levels.
+    Default indices (1, 2) correspond to level-2 and level-3 skips in 1-based counting.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        bottleneck_branch_filters: int = 64,
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        upsample_mode: str = "nearest",
+        usg_skip_indices: Sequence[int] = (1, 2),
+        usg_kernel_size: int = 7,
+        usg_gate_temperature: float = 0.1,
+        usg_init_tau: float = 0.5,
+        usg_init_alpha: float = 1.0,
+        usg_eps: float = 1e-6,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            encoder_branch_filters=encoder_branch_filters,
+            bottleneck_branch_filters=bottleneck_branch_filters,
+            inception_kernel_sizes=inception_kernel_sizes,
+            upsample_mode=upsample_mode,
+        )
+
+        valid_indices = set(range(len(self.encoder_blocks)))
+        self.usg_skip_indices = tuple(int(i) for i in usg_skip_indices)
+        invalid = [i for i in self.usg_skip_indices if i not in valid_indices]
+        if invalid:
+            raise ValueError(
+                f"usg_skip_indices out of range {sorted(valid_indices)}: got {invalid}"
+            )
+
+        self.usg_skip_blocks = nn.ModuleDict()
+        skip_channels = [block.out_channels for block in self.encoder_blocks]
+        for idx in self.usg_skip_indices:
+            self.usg_skip_blocks[str(idx)] = USGLKSkip3D(
+                channels=skip_channels[idx],
+                large_kernel_size=usg_kernel_size,
+                gate_temperature=usg_gate_temperature,
+                init_tau=usg_init_tau,
+                init_alpha=usg_init_alpha,
+                eps=usg_eps,
+            )
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for idx, (encoder_block, pool) in enumerate(zip(self.encoder_blocks, self.pool_layers)):
+            x = encoder_block(x)
+            skip = x
+            if str(idx) in self.usg_skip_blocks:
+                skip = self.usg_skip_blocks[str(idx)](skip)
+            skip_features.append(skip)
+            x = pool(x)
+
+        x = self.bottleneck(x)
+
+        for upsample, decoder_block, skip in zip(
+            self.up_layers,
+            self.decoder_blocks,
+            reversed(skip_features),
+        ):
+            x = upsample(x)
+            x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+
+        logits = self.head(x)
+        return {"logits": logits}
 
 
 class LIUNet3DAttentionGate(nn.Module):
