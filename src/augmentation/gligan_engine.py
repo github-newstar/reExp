@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from pathlib import Path
 from typing import Dict, Mapping, Sequence
 
@@ -36,6 +37,32 @@ def _load_checkpoint(path: str) -> Mapping[str, torch.Tensor]:
     if any(key.startswith("module.") for key in state.keys()):
         state = {key.replace("module.", "", 1): value for key, value in state.items()}
     return state
+
+
+def _build_swinunetr(
+    in_channels: int,
+    out_channels: int,
+    feature_size: int,
+    use_checkpoint: bool,
+    img_size: Sequence[int],
+) -> SwinUNETR:
+    """
+    Build SwinUNETR with MONAI-version compatibility.
+
+    Older MONAI expects `img_size`, newer MONAI removes it.
+    """
+    sig = inspect.signature(SwinUNETR.__init__)
+    supported = set(sig.parameters.keys())
+    kwargs = {
+        "in_channels": int(in_channels),
+        "out_channels": int(out_channels),
+        "feature_size": int(feature_size),
+        "use_checkpoint": bool(use_checkpoint),
+        "spatial_dims": 3,
+        "img_size": tuple(int(x) for x in img_size),
+    }
+    kwargs = {k: v for k, v in kwargs.items() if k in supported}
+    return SwinUNETR(**kwargs)
 
 
 def _resize_scalar_nearest(label: torch.Tensor, size: Sequence[int]) -> torch.Tensor:
@@ -175,12 +202,12 @@ class GliGANTumourSynthesizer:
         }
         self.generators = nn.ModuleDict()
         for key, ckpt in ckpts.items():
-            net = SwinUNETR(
-                img_size=self.img_size,
+            net = _build_swinunetr(
                 in_channels=4,
                 out_channels=1,
                 feature_size=int(cfg.feature_size),
                 use_checkpoint=bool(cfg.use_checkpoint),
+                img_size=self.img_size,
             )
             net.load_state_dict(_load_checkpoint(ckpt), strict=True)
             self.generators[key] = net

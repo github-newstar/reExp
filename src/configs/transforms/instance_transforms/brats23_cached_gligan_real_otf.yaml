@@ -27,10 +27,10 @@ train:
       generator_feature_size: 48
       generator_use_checkpoint: false
       generator_device: "${oc.env:GLIGAN_DEVICE,cpu}"
-      ckpt_t2f: "${oc.env:GLIGAN_CKPT_T2F,/Users/gz/paper/reExp/pretrained/gligan/weights/brats2023/flair/generator_400000.pt}"
-      ckpt_t1c: "${oc.env:GLIGAN_CKPT_T1C,/Users/gz/paper/reExp/pretrained/gligan/weights/brats2023/t1ce/generator_400000.pt}"
-      ckpt_t1n: "${oc.env:GLIGAN_CKPT_T1N,/Users/gz/paper/reExp/pretrained/gligan/weights/brats2023/t1/generator_400000.pt}"
-      ckpt_t2w: "${oc.env:GLIGAN_CKPT_T2W,/Users/gz/paper/reExp/pretrained/gligan/weights/brats2023/t2/generator_400000.pt}"
+      ckpt_t2f: "${oc.env:GLIGAN_CKPT_T2F,pretrained/gligan/weights/brats2023/flair/generator_400000.pt}"
+      ckpt_t1c: "${oc.env:GLIGAN_CKPT_T1C,pretrained/gligan/weights/brats2023/t1ce/generator_400000.pt}"
+      ckpt_t1n: "${oc.env:GLIGAN_CKPT_T1N,pretrained/gligan/weights/brats2023/t1/generator_400000.pt}"
+      ckpt_t2w: "${oc.env:GLIGAN_CKPT_T2W,pretrained/gligan/weights/brats2023/t2/generator_400000.pt}"
       legacy_logdir: "${oc.env:GLIGAN_LOGDIR,}"
       legacy_step_flair: null
       legacy_step_t1ce: null
@@ -38,7 +38,7 @@ train:
       legacy_step_t2: null
       strict_checkpoints: true
       use_label_gan: false
-      label_gan_ckpt: "${oc.env:GLIGAN_LABEL_CKPT,/Users/gz/paper/reExp/pretrained/gligan/weights/brats2023/label/G_iter100000.pth}"
+      label_gan_ckpt: "${oc.env:GLIGAN_LABEL_CKPT,pretrained/gligan/weights/brats2023/label/G_iter100000.pth}"
       label_latent_dim: 100
     - _target_: monai.transforms.RandFlipd
       keys: ["image", "label"]
