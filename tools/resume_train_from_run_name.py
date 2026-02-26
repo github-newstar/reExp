@@ -76,7 +76,6 @@ def _build_train_cmd(
         "config",
         f"writer.run_name={run_name}",
         "trainer.override=False",
-        "trainer.auto_resume=False",
         f"trainer.resume_from={checkpoint_name}",
         f"trainer.n_epochs={target_n_epochs}",
         f"optimizer.lr={lr}",
