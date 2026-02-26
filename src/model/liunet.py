@@ -470,6 +470,27 @@ class USGLKSkip3D(nn.Module):
         return x + self.alpha * repaired
 
 
+class FUESkip3D(nn.Module):
+    """
+    FUE skip enhancement:
+    1) channel-mean + sigmoid to obtain probability map
+    2) Shannon entropy uncertainty: u = -p * log(p + eps)
+    3) confidence-guided enhancement: z_tilde = z + z * (1 - u)
+    """
+
+    def __init__(self, *, eps: float = 1e-6):
+        super().__init__()
+        if eps <= 0:
+            raise ValueError(f"eps must be > 0, got {eps}.")
+        self.eps = float(eps)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        probability = torch.sigmoid(x.mean(dim=1, keepdim=True))
+        uncertainty = -(probability * torch.log(probability + self.eps))
+        confidence = 1.0 - uncertainty
+        return x + x * confidence
+
+
 class LIUNet3D(nn.Module):
     """
     Reproduction of LIU-Net (PeerJ CS 2025, cs-2787):
@@ -636,6 +657,71 @@ class LIUNet3DUSGLK(LIUNet3D):
             skip = x
             if str(idx) in self.usg_skip_blocks:
                 skip = self.usg_skip_blocks[str(idx)](skip)
+            skip_features.append(skip)
+            x = pool(x)
+
+        x = self.bottleneck(x)
+
+        for upsample, decoder_block, skip in zip(
+            self.up_layers,
+            self.decoder_blocks,
+            reversed(skip_features),
+        ):
+            x = upsample(x)
+            x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+
+        logits = self.head(x)
+        return {"logits": logits}
+
+
+class LIUNet3DFUE(LIUNet3D):
+    """
+    Original LIU-Net with FUE skip replacement on selected encoder levels.
+    Default indices (1, 2) correspond to level-2 and level-3 skips in 1-based counting.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        bottleneck_branch_filters: int = 64,
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        upsample_mode: str = "nearest",
+        fue_skip_indices: Sequence[int] = (1, 2),
+        fue_eps: float = 1e-6,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            encoder_branch_filters=encoder_branch_filters,
+            bottleneck_branch_filters=bottleneck_branch_filters,
+            inception_kernel_sizes=inception_kernel_sizes,
+            upsample_mode=upsample_mode,
+        )
+
+        valid_indices = set(range(len(self.encoder_blocks)))
+        self.fue_skip_indices = tuple(int(i) for i in fue_skip_indices)
+        invalid = [i for i in self.fue_skip_indices if i not in valid_indices]
+        if invalid:
+            raise ValueError(
+                f"fue_skip_indices out of range {sorted(valid_indices)}: got {invalid}"
+            )
+
+        self.fue_skip_blocks = nn.ModuleDict()
+        for idx in self.fue_skip_indices:
+            self.fue_skip_blocks[str(idx)] = FUESkip3D(eps=fue_eps)
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for idx, (encoder_block, pool) in enumerate(zip(self.encoder_blocks, self.pool_layers)):
+            x = encoder_block(x)
+            skip = x
+            if str(idx) in self.fue_skip_blocks:
+                skip = self.fue_skip_blocks[str(idx)](skip)
             skip_features.append(skip)
             x = pool(x)
 
