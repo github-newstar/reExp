@@ -55,20 +55,50 @@ def _must_exist(path: Path):
         raise FileNotFoundError(f"Missing required file: {path}")
 
 
+def _pick_ckpt(primary: Path, fallback: Path) -> Path:
+    if primary.exists():
+        return primary
+    if fallback.exists():
+        return fallback
+    raise FileNotFoundError(
+        "Missing checkpoint. Tried:\n"
+        f"  - {primary}\n"
+        f"  - {fallback}"
+    )
+
+
 def main():
     args = parse_args()
     root = Path(__file__).resolve().parent.parent
 
-    ckpt_t2f = root / "pretrained/gligan/weights/brats2023/flair/generator_400000.pt"
-    ckpt_t1c = root / "pretrained/gligan/weights/brats2023/t1ce/generator_400000.pt"
-    ckpt_t1n = root / "pretrained/gligan/weights/brats2023/t1/generator_400000.pt"
-    ckpt_t2w = root / "pretrained/gligan/weights/brats2023/t2/generator_400000.pt"
-    label_ckpt = root / "pretrained/gligan/weights/brats2023/label/G_iter100000.pth"
+    ckpt_t2f = _pick_ckpt(
+        root / "pretrained/gligan/weights/brats2023/flair/generator_400000.pt",
+        root
+        / "pretrained/gligan/weights_raw/Segmentation_Tasks/GliGAN/Checkpoint/brats2023/flair/weights/generator_400000.pt",
+    )
+    ckpt_t1c = _pick_ckpt(
+        root / "pretrained/gligan/weights/brats2023/t1ce/generator_400000.pt",
+        root
+        / "pretrained/gligan/weights_raw/Segmentation_Tasks/GliGAN/Checkpoint/brats2023/t1ce/weights/generator_400000.pt",
+    )
+    ckpt_t1n = _pick_ckpt(
+        root / "pretrained/gligan/weights/brats2023/t1/generator_400000.pt",
+        root
+        / "pretrained/gligan/weights_raw/Segmentation_Tasks/GliGAN/Checkpoint/brats2023/t1/weights/generator_400000.pt",
+    )
+    ckpt_t2w = _pick_ckpt(
+        root / "pretrained/gligan/weights/brats2023/t2/generator_400000.pt",
+        root
+        / "pretrained/gligan/weights_raw/Segmentation_Tasks/GliGAN/Checkpoint/brats2023/t2/weights/generator_400000.pt",
+    )
+    label_ckpt = _pick_ckpt(
+        root / "pretrained/gligan/weights/brats2023/label/G_iter100000.pth",
+        root
+        / "pretrained/gligan/weights_raw/Segmentation_Tasks/GliGAN/Checkpoint/brats2023/label/weights/G_iter100000.pth",
+    )
     for p in [ckpt_t2f, ckpt_t1c, ckpt_t1n, ckpt_t2w]:
         _must_exist(p)
-    # label ckpt is optional for current config(use_label_gan=false), but validate if present path exists.
-    if label_ckpt.exists():
-        pass
+    _must_exist(label_ckpt)
 
     env = os.environ.copy()
     env["GLIGAN_DEVICE"] = args.device
