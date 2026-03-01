@@ -974,6 +974,7 @@ class LIUNet3DDRBDMamba(nn.Module):
         drbd_mamba_state: int = 16,
         drbd_mamba_conv: int = 4,
         drbd_mamba_expand: int = 2,
+        drbd_sequence_impl: str = "mamba1",
         drbd_use_quantizer: bool = True,
         drbd_num_embeddings: int = 256,
         drbd_ema_decay: float = 0.99,
@@ -1013,6 +1014,7 @@ class LIUNet3DDRBDMamba(nn.Module):
                 mamba_state=drbd_mamba_state,
                 mamba_conv=drbd_mamba_conv,
                 mamba_expand=drbd_mamba_expand,
+                sequence_impl=drbd_sequence_impl,
                 use_quantizer=drbd_use_quantizer,
                 num_embeddings=drbd_num_embeddings,
                 ema_decay=drbd_ema_decay,
@@ -1032,6 +1034,7 @@ class LIUNet3DDRBDMamba(nn.Module):
             mamba_state=drbd_mamba_state,
             mamba_conv=drbd_mamba_conv,
             mamba_expand=drbd_mamba_expand,
+            sequence_impl=drbd_sequence_impl,
             use_quantizer=drbd_use_quantizer,
             num_embeddings=drbd_num_embeddings,
             ema_decay=drbd_ema_decay,
@@ -1112,6 +1115,16 @@ class LIUNet3DDRBDMamba(nn.Module):
         info += f"\nAll parameters: {all_parameters}"
         info += f"\nTrainable parameters: {trainable_parameters}"
         return info
+
+
+class LIUNet3DDRBDMamba2(LIUNet3DDRBDMamba):
+    """
+    Original LIU-Net backbone + DRBD-Mamba with Mamba2 sequence operator.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs["drbd_sequence_impl"] = "mamba2"
+        super().__init__(*args, **kwargs)
 
 
 class LIUNet3DMKIR(nn.Module):

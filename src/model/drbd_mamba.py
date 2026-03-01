@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Dict, Tuple
 
 import torch
@@ -116,6 +117,7 @@ class DRBDMambaBlock3D(nn.Module):
         mamba_state: int = 16,
         mamba_conv: int = 4,
         mamba_expand: int = 2,
+        sequence_impl: str = "mamba1",
         use_quantizer: bool = True,
         num_embeddings: int = 256,
         ema_decay: float = 0.99,
@@ -125,12 +127,15 @@ class DRBDMambaBlock3D(nn.Module):
         if channels <= 0:
             raise ValueError(f"channels must be positive, got {channels}")
 
-        from mamba_ssm import Mamba
-
         self.channels = int(channels)
+        self.sequence_impl = str(sequence_impl).strip().lower()
+        if self.sequence_impl not in {"mamba1", "mamba2"}:
+            raise ValueError(
+                f"sequence_impl must be one of ['mamba1', 'mamba2'], got {sequence_impl!r}"
+            )
         self.use_quantizer = bool(use_quantizer)
         self.seq_norm = nn.LayerNorm(self.channels)
-        self.bi_mamba = Mamba(
+        self.bi_mamba = self._build_sequence_layer(
             d_model=self.channels,
             d_state=mamba_state,
             d_conv=mamba_conv,
@@ -154,6 +159,45 @@ class DRBDMambaBlock3D(nn.Module):
             nn.SiLU(inplace=True),
         )
         self._morton_cache: Dict[Tuple[int, int, int, str], Tuple[torch.Tensor, torch.Tensor]] = {}
+
+    def _build_sequence_layer(
+        self,
+        d_model: int,
+        d_state: int,
+        d_conv: int,
+        expand: int,
+    ) -> nn.Module:
+        if self.sequence_impl == "mamba1":
+            from mamba_ssm import Mamba
+
+            return Mamba(
+                d_model=int(d_model),
+                d_state=int(d_state),
+                d_conv=int(d_conv),
+                expand=int(expand),
+            )
+
+        try:
+            from mamba_ssm import Mamba2
+        except Exception as exc:
+            raise ImportError(
+                "Mamba2 is required but unavailable. "
+                "Please install a mamba-ssm version that provides `Mamba2`."
+            ) from exc
+
+        # Keep compatibility across mamba-ssm minor API differences.
+        signature = inspect.signature(Mamba2.__init__)
+        supported = set(signature.parameters.keys())
+        kwargs = {
+            "d_model": int(d_model),
+            "d_state": int(d_state),
+            "d_conv": int(d_conv),
+            "expand": int(expand),
+        }
+        kwargs = {key: value for key, value in kwargs.items() if key in supported}
+        if "d_model" not in kwargs:
+            raise ValueError("Mamba2 signature does not expose required argument `d_model`.")
+        return Mamba2(**kwargs)
 
     @staticmethod
     def _compute_morton_permutation(

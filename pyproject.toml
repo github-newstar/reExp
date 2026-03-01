@@ -23,7 +23,7 @@ dependencies = [
     "simpleitk",
     "pillow",
     "einops",
-    "mamba-ssm; platform_system == 'Linux'",
+    "mamba-ssm>=2.3.0; platform_system == 'Linux'",
 ]
 
 [dependency-groups]

@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760">
+  <defs>
+    <style>
+      .bg { fill: #fcfdff; }
+      .title { font: 700 30px Arial, sans-serif; fill: #1f2d3d; }
+      .box { fill: #eef5ff; stroke: #4d7fb8; stroke-width: 2; rx: 14; ry: 14; }
+      .box-alt { fill: #f6f8fb; stroke: #8a96a3; stroke-width: 2; rx: 14; ry: 14; }
+      .box-loop { fill: #f4edff; stroke: #8362c8; stroke-width: 2; rx: 14; ry: 14; }
+      .loop-frame { fill: #faf7ff; stroke: #b7a5dc; stroke-width: 2; rx: 16; ry: 16; }
+      .term { fill: #e9f7ee; stroke: #3c8f5a; stroke-width: 2; rx: 16; ry: 16; }
+      .decision { fill: #fff7e8; stroke: #c8882e; stroke-width: 2; }
+      .txt { font: 600 22px Arial, sans-serif; fill: #1f2d3d; }
+      .txts { font: 500 16px Arial, sans-serif; fill: #30465a; }
+      .edge { stroke: #4d7fb8; stroke-width: 2.5; fill: none; marker-end: url(#arrowBlue); }
+      .edge-loop { stroke: #8362c8; stroke-width: 2.5; fill: none; marker-end: url(#arrowPurple); }
+    </style>
+
+    <marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#4d7fb8"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#8362c8"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1500" height="760"/>
+  <text x="70" y="64" class="title">GliGAN Dynamic Augmentation (On-the-Fly)</text>
+
+  <!-- Main flow -->
+  <rect x="70" y="130" width="240" height="84" class="box"/>
+  <text x="190" y="178" text-anchor="middle" class="txt">Input</text>
+  <text x="190" y="200" text-anchor="middle" class="txts">(image, label)</text>
+
+  <rect x="70" y="260" width="240" height="90" class="box"/>
+  <text x="190" y="312" text-anchor="middle" class="txt">Crop</text>
+  <text x="190" y="334" text-anchor="middle" class="txts">96 x 96 x 96</text>
+
+  <polygon points="490,260 620,330 490,400 360,330" class="decision"/>
+  <text x="490" y="324" text-anchor="middle" class="txt">GliGAN Insert?</text>
+  <text x="490" y="348" text-anchor="middle" class="txts">p = 0.4</text>
+
+  <rect x="760" y="170" width="240" height="84" class="box-alt"/>
+  <text x="880" y="218" text-anchor="middle" class="txt">No-op</text>
+  <text x="880" y="240" text-anchor="middle" class="txts">keep patch</text>
+
+  <rect x="1120" y="170" width="280" height="84" class="box"/>
+  <text x="1260" y="218" text-anchor="middle" class="txt">Augmented Patch</text>
+  <text x="1260" y="240" text-anchor="middle" class="txts">(image, label)</text>
+
+  <rect x="1120" y="300" width="280" height="84" class="term"/>
+  <text x="1260" y="350" text-anchor="middle" class="txt">Train Step</text>
+
+  <!-- Loop area -->
+  <rect x="700" y="300" width="700" height="400" class="loop-frame"/>
+  <text x="730" y="340" class="txt">Insertion Loop</text>
+  <text x="730" y="364" class="txts">1 to 2 tumors (second insertion p = 0.35)</text>
+
+  <rect x="760" y="410" width="280" height="88" class="box-loop"/>
+  <text x="900" y="462" text-anchor="middle" class="txt">Sample Template</text>
+  <text x="900" y="484" text-anchor="middle" class="txts">scale 0.35-0.85</text>
+
+  <rect x="1080" y="410" width="280" height="88" class="box-loop"/>
+  <text x="1220" y="462" text-anchor="middle" class="txt">Place in Healthy</text>
+  <text x="1220" y="484" text-anchor="middle" class="txts">valid voxels &gt;= 24</text>
+
+  <rect x="1080" y="540" width="280" height="88" class="box-loop"/>
+  <text x="1220" y="592" text-anchor="middle" class="txt">GliGAN + Blend</text>
+
+  <!-- Edges: main -->
+  <path class="edge" d="M190,214 L190,260"/>
+  <path class="edge" d="M310,330 L360,330"/>
+  <path class="edge" d="M620,315 L760,212"/>
+  <text x="690" y="274" class="txts">No (0.6)</text>
+  <path class="edge" d="M620,330 L700,330"/>
+  <text x="640" y="356" class="txts">Yes (0.4)</text>
+
+  <path class="edge" d="M1000,212 L1120,212"/>
+  <path class="edge" d="M1260,254 L1260,300"/>
+
+  <!-- Edges: loop -->
+  <path class="edge-loop" d="M1040,454 L1080,454"/>
+  <path class="edge-loop" d="M1220,498 L1220,540"/>
+  <path class="edge-loop" d="M1080,584 L900,584 L900,498"/>
+  <text x="920" y="566" class="txts">if next insertion</text>
+  <path class="edge-loop" d="M1360,584 L1420,584 L1420,212 L1400,212"/>
+  <text x="1368" y="560" class="txts">finish</text>
+</svg>
