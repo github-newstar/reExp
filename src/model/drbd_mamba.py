@@ -193,10 +193,7 @@ class DRBDMambaBlock3D(nn.Module):
             "d_state": int(d_state),
             "d_conv": int(d_conv),
             "expand": int(expand),
-            # Avoid hard dependency on fused causal-conv1d kernels in mixed environments.
-            # This keeps Mamba2 functional even when optional Triton/CUDA extensions
-            # are unavailable or ABI-incompatible.
-            "use_mem_eff_path": False,
+            "use_mem_eff_path": True,
         }
         kwargs = {key: value for key, value in kwargs.items() if key in supported}
         if "d_model" not in kwargs:
