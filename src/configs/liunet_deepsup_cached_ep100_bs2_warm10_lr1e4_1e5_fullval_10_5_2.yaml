@@ -1,0 +1,80 @@
+defaults:
+  - brats23_swin_unetr_cached
+  - override model: liunet_deepsup
+  - _self_
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+  weight_decay: 1e-5
+
+lr_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${trainer.n_epochs}
+  eta_min: 1e-5
+
+loss_function:
+  _target_: src.loss.DiceFocalSegLoss
+  dice_weight: 1.0
+  focal_weight: 1.0
+  gamma: 2.0
+  alpha: null
+  deep_supervision: true
+  deep_supervision_weights: [0.5, 0.25]
+
+writer:
+  run_name: liunet_deepsup_ep100_bs2_warm10_lr1e4_to_1e5_fullval_10_5_2
+
+datasets:
+  train:
+    cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  val:
+    cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  test:
+    cache_dir: "${oc.env:CACHE_DIR,/root/autodl-tmp/cached}"
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+
+dataloader:
+  batch_size: 2
+  num_workers: 16
+
+trainer:
+  n_epochs: 100
+  max_grad_norm: 1.0
+  lr_scheduler_step_per: epoch
+  warmup:
+    enabled: true
+    epochs: 10
+    start_factor: 0.1
+    end_factor: 1.0
+  validation_policy:
+    enabled: true
+    default_mode: full
+    always_eval_epoch1: false
+    phases:
+      - max_epoch_ratio: 0.5
+        interval: 10
+        mode: full
+      - max_epoch_ratio: 0.8
+        interval: 5
+        mode: full
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: full
+    full_eval:
+      enabled: false
+      interval: 0
+      epochs: []
+    post_training_full_eval:
+      enabled: false
+  use_sliding_window_inference: true
+  sw_roi_size: [96, 96, 96]
+  sw_batch_size: 1

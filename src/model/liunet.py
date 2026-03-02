@@ -598,6 +598,96 @@ class LIUNet3D(nn.Module):
         return info
 
 
+class LIUNet3DDeepSupervision(LIUNet3D):
+    """
+    Original LIU-Net with deep supervision heads on decoder stages.
+
+    Default aux heads:
+    - decoder index 2: D/2 resolution
+    - decoder index 1: D/4 resolution
+    Aux logits are upsampled to the final logits size and returned only in training mode.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        bottleneck_branch_filters: int = 64,
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        upsample_mode: str = "nearest",
+        aux_decoder_indices: Sequence[int] = (2, 1),
+        deep_supervision_train_only: bool = True,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            encoder_branch_filters=encoder_branch_filters,
+            bottleneck_branch_filters=bottleneck_branch_filters,
+            inception_kernel_sizes=inception_kernel_sizes,
+            upsample_mode=upsample_mode,
+        )
+        self.deep_supervision_train_only = bool(deep_supervision_train_only)
+
+        num_decoder_stages = len(self.decoder_blocks)
+        self.aux_decoder_indices = tuple(int(i) for i in aux_decoder_indices)
+        invalid = [i for i in self.aux_decoder_indices if i < 0 or i >= num_decoder_stages]
+        if invalid:
+            raise ValueError(
+                f"aux_decoder_indices out of range [0, {num_decoder_stages - 1}]: {invalid}"
+            )
+
+        self.aux_heads = nn.ModuleDict()
+        for idx in self.aux_decoder_indices:
+            self.aux_heads[str(idx)] = nn.Conv3d(
+                self.decoder_blocks[idx].out_channels,
+                out_channels,
+                kernel_size=1,
+            )
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for encoder_block, pool in zip(self.encoder_blocks, self.pool_layers):
+            x = encoder_block(x)
+            skip_features.append(x)
+            x = pool(x)
+
+        x = self.bottleneck(x)
+
+        decoder_features: list[torch.Tensor] = []
+        for upsample, decoder_block, skip in zip(
+            self.up_layers,
+            self.decoder_blocks,
+            reversed(skip_features),
+        ):
+            x = upsample(x)
+            x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+            decoder_features.append(x)
+
+        logits = self.head(x)
+        output = {"logits": logits}
+
+        if self.deep_supervision_train_only and not self.training:
+            return output
+
+        aux_logits: list[torch.Tensor] = []
+        for idx in self.aux_decoder_indices:
+            aux = self.aux_heads[str(idx)](decoder_features[idx])
+            aux = F.interpolate(
+                aux,
+                size=logits.shape[2:],
+                mode="trilinear",
+                align_corners=False,
+            )
+            aux_logits.append(aux)
+        if len(aux_logits) > 0:
+            output["aux_logits"] = aux_logits
+        return output
+
+
 class LIUNet3DUSGLK(LIUNet3D):
     """
     Original LIU-Net with USG-LK skip replacement on selected encoder levels.
