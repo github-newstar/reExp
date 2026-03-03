@@ -27,6 +27,7 @@ from src.model.lgmambanet import LGMambaNet
 from src.model.liunet import (
     LIUNet3D,
     LIUNet3DDeepSupervision,
+    LIUNet3DLFSDE,
     LIUNet3DAttentionGate,
     LIUNet3DAddSkip,
     LIUNet3DFUE,
@@ -73,6 +74,7 @@ __all__ = [
     "LGMambaNet",
     "LIUNet3D",
     "LIUNet3DDeepSupervision",
+    "LIUNet3DLFSDE",
     "LIUNet3DAttentionGate",
     "LIUNet3DAddSkip",
     "LIUNet3DFUE",

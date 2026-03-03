@@ -491,6 +491,90 @@ class FUESkip3D(nn.Module):
         return x + x * confidence
 
 
+class LFSDEBlock3D(nn.Module):
+    """
+    L-FSDE V2.1 (Lightweight Frequency-Spatial Dual Enhancement) for 3D skip features.
+
+    Out = S * (1 + G)
+    where:
+      S = DWConv3d(X)
+      G = sigmoid(Conv1x1(Y))
+      Y = irfftn(rfftn(X) * M)
+      M = 1 + alpha * tanh(Upsample(W_small))
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        spectrum_size: Sequence[int] = (8, 8, 8),
+        alpha: float = 0.2,
+        learnable_alpha: bool = False,
+    ):
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be > 0, got {channels}")
+        if len(spectrum_size) != 3:
+            raise ValueError(f"spectrum_size must be 3D, got {spectrum_size}")
+        if any(int(s) <= 0 for s in spectrum_size):
+            raise ValueError(f"spectrum_size must be positive, got {spectrum_size}")
+
+        d0, h0, w0 = (int(s) for s in spectrum_size)
+
+        self.channels = int(channels)
+        self.spectrum_size = (d0, h0, w0)
+
+        # Spatial branch: 3x3x3 depthwise convolution.
+        self.spatial_dw = nn.Conv3d(
+            channels,
+            channels,
+            kernel_size=3,
+            padding=1,
+            groups=channels,
+            bias=False,
+        )
+
+        # Frequency branch: channel-shared compressed spectrum kernel.
+        self.small_weight = nn.Parameter(torch.zeros(1, 1, d0, h0, w0))
+        if learnable_alpha:
+            self.alpha = nn.Parameter(torch.tensor(float(alpha), dtype=torch.float32))
+        else:
+            self.register_buffer("alpha", torch.tensor(float(alpha), dtype=torch.float32))
+
+        # Gated fusion map.
+        self.gate_conv = nn.Conv3d(channels, 1, kernel_size=1, bias=True)
+        self.gate_act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[1] != self.channels:
+            raise ValueError(
+                f"LFSDEBlock3D channel mismatch: expected {self.channels}, got {x.shape[1]}"
+            )
+
+        # 1) Spatial branch.
+        spatial = self.spatial_dw(x)
+
+        # 2) Frequency branch with controlled residual gain mask.
+        x_fft_in = x.float()
+        spectrum = torch.fft.rfftn(x_fft_in, dim=(2, 3, 4))
+        _, _, d_f, h_f, w_f = spectrum.shape
+
+        w_up = F.interpolate(
+            self.small_weight,
+            size=(d_f, h_f, w_f),
+            mode="trilinear",
+            align_corners=False,
+        )
+        mask = 1.0 + self.alpha.to(dtype=w_up.dtype) * torch.tanh(w_up)
+        modulated = spectrum * mask
+
+        freq_back = torch.fft.irfftn(modulated, s=x.shape[2:], dim=(2, 3, 4))
+        freq_back = freq_back.to(dtype=x.dtype)
+
+        # 3) Gated fusion: spatial trunk + frequency-guided gain.
+        gate = self.gate_act(self.gate_conv(freq_back))
+        return spatial * (1.0 + gate)
+
+
 class LIUNet3D(nn.Module):
     """
     Reproduction of LIU-Net (PeerJ CS 2025, cs-2787):
@@ -686,6 +770,80 @@ class LIUNet3DDeepSupervision(LIUNet3D):
         if len(aux_logits) > 0:
             output["aux_logits"] = aux_logits
         return output
+
+
+class LIUNet3DLFSDE(LIUNet3D):
+    """
+    LIU-Net with L-FSDE-enhanced skip connections.
+
+    By default, replace skip levels 2/3/4 (1-based) -> encoder indices 1/2/3.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        encoder_branch_filters: Sequence[int] = (4, 8, 16, 32),
+        bottleneck_branch_filters: int = 64,
+        inception_kernel_sizes: Sequence[int] = (1, 3, 5),
+        upsample_mode: str = "nearest",
+        lfsde_skip_indices: Sequence[int] = (1, 2, 3),
+        lfsde_spectrum_size: Sequence[int] = (8, 8, 8),
+        lfsde_alpha: float = 0.2,
+        lfsde_learnable_alpha: bool = False,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            encoder_branch_filters=encoder_branch_filters,
+            bottleneck_branch_filters=bottleneck_branch_filters,
+            inception_kernel_sizes=inception_kernel_sizes,
+            upsample_mode=upsample_mode,
+        )
+
+        valid_indices = set(range(len(self.encoder_blocks)))
+        self.lfsde_skip_indices = tuple(int(i) for i in lfsde_skip_indices)
+        invalid = [i for i in self.lfsde_skip_indices if i not in valid_indices]
+        if invalid:
+            raise ValueError(
+                f"lfsde_skip_indices out of range {sorted(valid_indices)}: got {invalid}"
+            )
+
+        self.lfsde_skip_blocks = nn.ModuleDict()
+        skip_channels = [block.out_channels for block in self.encoder_blocks]
+        for idx in self.lfsde_skip_indices:
+            self.lfsde_skip_blocks[str(idx)] = LFSDEBlock3D(
+                channels=skip_channels[idx],
+                spectrum_size=lfsde_spectrum_size,
+                alpha=lfsde_alpha,
+                learnable_alpha=lfsde_learnable_alpha,
+            )
+
+    def forward(self, image: torch.Tensor, **batch) -> dict[str, torch.Tensor]:
+        skip_features: list[torch.Tensor] = []
+        x = image
+
+        for idx, (encoder_block, pool) in enumerate(zip(self.encoder_blocks, self.pool_layers)):
+            x = encoder_block(x)
+            skip = x
+            if str(idx) in self.lfsde_skip_blocks:
+                skip = self.lfsde_skip_blocks[str(idx)](skip)
+            skip_features.append(skip)
+            x = pool(x)
+
+        x = self.bottleneck(x)
+
+        for upsample, decoder_block, skip in zip(
+            self.up_layers,
+            self.decoder_blocks,
+            reversed(skip_features),
+        ):
+            x = upsample(x)
+            x = torch.cat([skip, x], dim=1)
+            x = decoder_block(x)
+
+        logits = self.head(x)
+        return {"logits": logits}
 
 
 class LIUNet3DUSGLK(LIUNet3D):
