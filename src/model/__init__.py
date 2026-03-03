@@ -46,7 +46,7 @@ from src.model.liunet import (
 from src.model.lmambanet import LMambaNet
 from src.model.no_new_net import NoNewNet
 from src.model.swin_unetr import SwinUNETRSegModel
-from src.model.unet3d import UNet3D
+from src.model.unet3d import UNet3D, UNet3DFullDualBandFSDE34
 
 __all__ = [
     "BaselineModel",
@@ -94,4 +94,5 @@ __all__ = [
     "NoNewNet",
     "SwinUNETRSegModel",
     "UNet3D",
+    "UNet3DFullDualBandFSDE34",
 ]
