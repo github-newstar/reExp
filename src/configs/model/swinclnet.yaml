@@ -1,0 +1,7 @@
+_target_: src.model.SwinCLNet3D
+in_channels: 4
+out_channels: 3
+feature_channels: [32, 64, 128, 256, 320]
+num_heads: [2, 2, 4, 8, 8]
+stage_depths: [2, 2, 2, 2, 2]
+window_size: 4

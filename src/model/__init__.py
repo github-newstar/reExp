@@ -45,7 +45,11 @@ from src.model.liunet import (
 )
 from src.model.lmambanet import LMambaNet
 from src.model.no_new_net import NoNewNet
+from src.model.segmamba import SegMamba3D
+from src.model.segresnet import SegResNet3D
+from src.model.swinclnet import SwinCLNet3D
 from src.model.swin_unetr import SwinUNETRSegModel
+from src.model.unetr import UNETR3D
 from src.model.unet3d import UNet3D, UNet3DFullDualBandFSDE34
 
 __all__ = [
@@ -92,7 +96,11 @@ __all__ = [
     "LIUNet3DMKIRECAC3TriMambaBottleneck",
     "LMambaNet",
     "NoNewNet",
+    "SegMamba3D",
+    "SegResNet3D",
+    "SwinCLNet3D",
     "SwinUNETRSegModel",
+    "UNETR3D",
     "UNet3D",
     "UNet3DFullDualBandFSDE34",
 ]
