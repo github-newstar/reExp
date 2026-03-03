@@ -6,38 +6,59 @@ defaults:
 writer:
   run_name: unet3d_full_dualband_fsde_skip34_cached_ep100
 
+optimizer:
+  lr: 1e-4
+
+lr_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${trainer.n_epochs}
+  eta_min: 1e-5
+
 datasets:
   train:
     usage_ratio: 1.0
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
   val:
     usage_ratio: 1.0
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  test:
+    usage_ratio: 1.0
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
 
 dataloader:
   batch_size: 2
+  num_workers: 16
 
 trainer:
   n_epochs: 100
-  max_grad_norm: 3.0
+  max_grad_norm: 1.0
   eval_partitions: ["val"]
   warmup:
     enabled: true
     epochs: 10
   validation_policy:
     enabled: true
-    default_mode: quick
-    always_eval_epoch1: true
+    default_mode: full
+    always_eval_epoch1: false
     phases:
       - max_epoch_ratio: 0.5
-        interval: 3
-        mode: quick
+        interval: 10
+        mode: full
+      - max_epoch_ratio: 0.8
+        interval: 5
+        mode: full
       - max_epoch_ratio: 1.0
         interval: 2
-        mode: quick
+        mode: full
     full_eval:
-      enabled: true
+      enabled: false
       interval: 0
-      epochs: [100]
+      epochs: []
     post_training_full_eval:
-      enabled: true
-      top_k: 3
-      report_best_only: true
+      enabled: false
