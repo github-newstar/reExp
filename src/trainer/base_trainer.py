@@ -1080,9 +1080,21 @@ class BaseTrainer:
         transforms = self.batch_transforms.get(transform_type)
         if transforms is not None:
             for transform_name in transforms.keys():
-                batch[transform_name] = transforms[transform_name](
-                    batch[transform_name]
-                )
+                transform = transforms[transform_name]
+                # Backward-compatible behavior:
+                # - if transform_name exists in batch: tensor-wise transform
+                # - otherwise: treat as batch-level transform that consumes and
+                #   returns the full batch dict
+                if transform_name in batch:
+                    batch[transform_name] = transform(batch[transform_name])
+                else:
+                    transformed = transform(batch)
+                    if not isinstance(transformed, dict):
+                        raise ValueError(
+                            "Batch-level transform must return dict, got "
+                            f"{type(transformed)!r} for key={transform_name!r}"
+                        )
+                    batch = transformed
         return batch
 
     def _clip_grad_norm(self):

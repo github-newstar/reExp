@@ -1,0 +1,4 @@
+defaults:
+  - batch_transforms: brats23_et_copy_paste_gpu_fastA
+  - instance_transforms: brats23_cached
+  - _self_

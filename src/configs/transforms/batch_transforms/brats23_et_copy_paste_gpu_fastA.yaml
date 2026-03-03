@@ -1,0 +1,22 @@
+train:
+  batch:
+    _target_: src.transforms.RandETCopyPasteBatch
+    donor_bank_path: "${oc.env:ET_DONOR_BANK,pretrained/et_copy_paste/et_donor_bank.pt}"
+    image_key: "image"
+    label_key: "label"
+    prob: 0.25
+    max_insertions: 1
+    second_insertion_prob: 0.0
+    scale_range: [0.8, 1.0]
+    flip_prob: 0.3
+    rot90_prob: 0.3
+    small_donor_bias: 1.0
+    min_insert_voxels: 24
+    min_distance_to_tumor: 6
+    blend_band_width: 2
+    blend_smooth_steps: 0
+    intensity_match: false
+    max_position_trials: 8
+    cache_on_device: true
+
+inference: null
