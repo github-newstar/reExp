@@ -2058,6 +2058,14 @@ class LIUNet3DDepthwiseSeparable(nn.Module):
         return info
 
 
+class LIUDWNet(LIUNet3DDepthwiseSeparable):
+    """
+    Alias model for experiments/paper naming:
+    LiuDWNet = LIU-Net with all Inception convolutions replaced by
+    depthwise separable convolutions.
+    """
+
+
 class LIUNet3DUCDFi(nn.Module):
     """
     LIU-Net variant following uC-3DU-Net:
