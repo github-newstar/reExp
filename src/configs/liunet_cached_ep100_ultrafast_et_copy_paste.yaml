@@ -1,0 +1,11 @@
+defaults:
+  - liunet_cached_ep100_ultrafast
+  - override transforms: brats23_cached_et_copy_paste
+  - _self_
+
+writer:
+  run_name: liunet_cached_ep100_ultrafast_96_et_copy_paste
+
+dataloader:
+  persistent_workers: true
+  multiprocessing_context: spawn
