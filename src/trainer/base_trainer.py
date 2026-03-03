@@ -163,6 +163,7 @@ class BaseTrainer:
         self.grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_grad_scaler)
 
         # define dataloaders
+        self.all_dataloaders = dataloaders
         self.train_dataloader = dataloaders["train"]
         if epoch_len is None:
             # epoch-based training
@@ -534,6 +535,7 @@ class BaseTrainer:
             )
 
         top_k = max(1, int(cfg.get("top_k", 5)))
+        use_best_model_checkpoint = bool(cfg.get("use_best_model_checkpoint", False))
         by_epoch = {}
         for record in self._eval_history:
             if record["part"] != metric_part:
@@ -544,24 +546,47 @@ class BaseTrainer:
                 continue
             by_epoch[int(record["epoch"])] = float(record["metrics"][metric_name])
 
-        if not by_epoch:
+        if (not by_epoch) and (not use_best_model_checkpoint):
             self.logger.warning(
                 "No evaluation history found for post_training_full_eval. Skipping."
             )
             return
 
-        ranked_epochs = sorted(
-            by_epoch.items(),
-            key=lambda item: item[1],
-            reverse=ranking_mode == "max",
-        )
+        ranked_epochs = []
+        if by_epoch:
+            ranked_epochs = sorted(
+                by_epoch.items(),
+                key=lambda item: item[1],
+                reverse=ranking_mode == "max",
+            )
+
         selected = []
-        for epoch, score in ranked_epochs:
-            checkpoint_path = self.checkpoint_dir / f"checkpoint-epoch{epoch}.pth"
-            if checkpoint_path.exists():
-                selected.append((epoch, score, checkpoint_path))
-            if len(selected) >= top_k:
-                break
+        if use_best_model_checkpoint:
+            best_ckpt = None
+            for name in ("best_model.pth", "model_best.pth"):
+                candidate = self.checkpoint_dir / name
+                if candidate.exists():
+                    best_ckpt = candidate
+                    break
+            if best_ckpt is not None:
+                if ranked_epochs:
+                    ref_epoch, ref_score = ranked_epochs[0]
+                else:
+                    ref_epoch, ref_score = int(self._last_epoch), float("nan")
+                selected = [(int(ref_epoch), float(ref_score), best_ckpt)]
+            else:
+                self.logger.warning(
+                    "use_best_model_checkpoint=True but best_model.pth/model_best.pth "
+                    "not found. Fallback to checkpoint-epoch*.pth candidates."
+                )
+
+        if not selected:
+            for epoch, score in ranked_epochs:
+                checkpoint_path = self.checkpoint_dir / f"checkpoint-epoch{epoch}.pth"
+                if checkpoint_path.exists():
+                    selected.append((epoch, score, checkpoint_path))
+                if len(selected) >= top_k:
+                    break
 
         if not selected:
             self.logger.warning(
@@ -571,11 +596,40 @@ class BaseTrainer:
             return
 
         eval_parts = list(cfg.get("partitions", [metric_part]))
-        unknown_parts = [p for p in eval_parts if p not in self.evaluation_dataloaders]
+        unknown_parts = [p for p in eval_parts if p not in self.all_dataloaders]
         if unknown_parts:
             raise ValueError(
                 "trainer.validation_policy.post_training_full_eval.partitions contains "
                 f"unknown partitions: {unknown_parts}"
+            )
+
+        # Optional: add extra inference metrics only for post-training full eval
+        # (e.g. HD95 on test) without slowing down training-time validation.
+        original_inference_metrics = self.metrics["inference"]
+        original_eval_tracker = self.evaluation_metrics
+        extra_metrics_cfg = cfg.get("extra_inference_metrics")
+        if extra_metrics_cfg:
+            from hydra.utils import instantiate
+
+            instantiated = instantiate(extra_metrics_cfg)
+            if isinstance(instantiated, (list, tuple)):
+                extra_metrics = list(instantiated)
+            else:
+                extra_metrics = [instantiated]
+
+            merged_metrics = list(original_inference_metrics)
+            existing_names = {m.name for m in merged_metrics}
+            for metric in extra_metrics:
+                if metric.name in existing_names:
+                    continue
+                merged_metrics.append(metric)
+                existing_names.add(metric.name)
+
+            self.metrics["inference"] = merged_metrics
+            self.evaluation_metrics = MetricTracker(
+                *self.config.writer.loss_names,
+                *[m.name for m in merged_metrics],
+                writer=self.writer,
             )
 
         model_ref = self._model_for_state_dict()
@@ -584,6 +638,7 @@ class BaseTrainer:
             "ranking_mode": ranking_mode,
             "source_modes": source_modes,
             "top_k": top_k,
+            "use_best_model_checkpoint": use_best_model_checkpoint,
             "candidates": [
                 {"epoch": int(epoch), "score": float(score), "checkpoint": str(path)}
                 for epoch, score, path in selected
@@ -594,26 +649,30 @@ class BaseTrainer:
         self.logger.info(
             "Starting post-training full evaluation on top-%d checkpoints.", len(selected)
         )
-        for epoch, quick_score, checkpoint_path in selected:
-            checkpoint = self._load_checkpoint_compat(str(checkpoint_path))
-            model_ref.load_state_dict(checkpoint["state_dict"])
-            candidate_result = {
-                "epoch": int(epoch),
-                "quick_score": float(quick_score),
-                "checkpoint": str(checkpoint_path),
-                "metrics": {},
-            }
-            for part in eval_parts:
-                logs = self._evaluation_epoch(
-                    epoch=epoch,
-                    part=part,
-                    dataloader=self.evaluation_dataloaders[part],
-                    eval_mode="full",
-                    max_batches=None,
-                )
-                for name, value in logs.items():
-                    candidate_result["metrics"][f"{part}_{name}"] = float(value)
-            summary["full_eval_results"].append(candidate_result)
+        try:
+            for epoch, quick_score, checkpoint_path in selected:
+                checkpoint = self._load_checkpoint_compat(str(checkpoint_path))
+                model_ref.load_state_dict(checkpoint["state_dict"])
+                candidate_result = {
+                    "epoch": int(epoch),
+                    "quick_score": float(quick_score),
+                    "checkpoint": str(checkpoint_path),
+                    "metrics": {},
+                }
+                for part in eval_parts:
+                    logs = self._evaluation_epoch(
+                        epoch=epoch,
+                        part=part,
+                        dataloader=self.all_dataloaders[part],
+                        eval_mode="full",
+                        max_batches=None,
+                    )
+                    for name, value in logs.items():
+                        candidate_result["metrics"][f"{part}_{name}"] = float(value)
+                summary["full_eval_results"].append(candidate_result)
+        finally:
+            self.metrics["inference"] = original_inference_metrics
+            self.evaluation_metrics = original_eval_tracker
 
         ranked_full = []
         for result in summary["full_eval_results"]:

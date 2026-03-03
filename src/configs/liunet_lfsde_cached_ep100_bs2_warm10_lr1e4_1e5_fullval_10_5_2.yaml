@@ -73,7 +73,47 @@ trainer:
       interval: 0
       epochs: []
     post_training_full_eval:
-      enabled: false
+      enabled: true
+      top_k: 1
+      metric: "val_MeanDice"
+      mode: max
+      source_modes: ["full"]
+      partitions: ["test"]
+      use_best_model_checkpoint: true
+      report_best_only: true
+      save_summary_path: "post_full_eval_summary_hd95_test.json"
+      extra_inference_metrics:
+        - _target_: src.metrics.MeanHD95Metric
+          name: "HD95_Mean"
+          threshold: 0.5
+          apply_sigmoid: true
+          include_background: true
+          directed: false
+          empty_fallback: 0.0
+        - _target_: src.metrics.ChannelHD95Metric
+          name: "HD95_TC"
+          channel_index: 0
+          threshold: 0.5
+          apply_sigmoid: true
+          include_background: true
+          directed: false
+          empty_fallback: 0.0
+        - _target_: src.metrics.ChannelHD95Metric
+          name: "HD95_WT"
+          channel_index: 1
+          threshold: 0.5
+          apply_sigmoid: true
+          include_background: true
+          directed: false
+          empty_fallback: 0.0
+        - _target_: src.metrics.ChannelHD95Metric
+          name: "HD95_ET"
+          channel_index: 2
+          threshold: 0.5
+          apply_sigmoid: true
+          include_background: true
+          directed: false
+          empty_fallback: 0.0
   use_sliding_window_inference: true
   sw_roi_size: [96, 96, 96]
   sw_batch_size: 1
