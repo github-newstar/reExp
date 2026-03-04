@@ -171,10 +171,12 @@ class _FSDESkipConnection(nn.Module):
         self.dim = int(dim)
         self.mode = str(mode)
         self.enhancer = enhancer
+        self.last_enhanced: torch.Tensor | None = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = self.submodule(x)
         skip = self.enhancer(x) if self.enhancer is not None else x
+        self.last_enhanced = skip
         if self.mode == "cat":
             return torch.cat([skip, y], dim=self.dim)
         if self.mode == "add":
@@ -228,6 +230,7 @@ class UNet3DFullDualBandFSDE34(nn.Module):
                 f"fsde_skip_indices out of range {sorted(valid_indices)}: got {invalid}"
             )
         self.fsde_skip_indices = fsde_skip_indices
+        self._skip_wrappers: dict[int, _FSDESkipConnection] = {}
 
         # Build per-skip enhancer map.
         d0, h0, w0 = (int(v) for v in fsde_input_size)
@@ -272,6 +275,7 @@ class UNet3DFullDualBandFSDE34(nn.Module):
                         enhancer=enhancer,
                     )
                     setattr(parent, name, wrapped)
+                    self._skip_wrappers[counter] = wrapped
                     _recurse(wrapped.submodule)
                 else:
                     _recurse(child)
@@ -280,6 +284,122 @@ class UNet3DFullDualBandFSDE34(nn.Module):
 
     def forward(self, image, **batch):
         return {"logits": self.net(image)}
+
+    def __str__(self):
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
+
+
+class UNet3DFullDualBandFSDE34Boundary(nn.Module):
+    """
+    UNet3D + Full Dual-Band FSDE on selected skips + boundary head on skip4.
+
+    Boundary head is attached to the enhanced skip feature (after FSDE), then
+    upsampled to the segmentation logits resolution for boundary supervision.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        strides: tuple[int, int, int, int] = (2, 2, 2, 2),
+        num_res_units: int = 0,
+        fsde_skip_indices: Sequence[int] = (4,),
+        fsde_input_size: Sequence[int] = (96, 96, 96),
+        fsde_alpha: float = 0.1,
+        fsde_learnable_alpha: bool = False,
+        fsde_alpha_max: float = 0.3,
+        fsde_mix_gate_channels: int = 1,
+        fsde_gain_channels: int = 1,
+        fsde_use_norm_act: bool = True,
+        boundary_skip_index: int = 4,
+        boundary_mid_channels: int = 32,
+        boundary_out_channels: int = 1,
+    ):
+        super().__init__()
+        self.core = UNet3DFullDualBandFSDE34(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            channels=channels,
+            strides=strides,
+            num_res_units=num_res_units,
+            fsde_skip_indices=fsde_skip_indices,
+            fsde_input_size=fsde_input_size,
+            fsde_alpha=fsde_alpha,
+            fsde_learnable_alpha=fsde_learnable_alpha,
+            fsde_alpha_max=fsde_alpha_max,
+            fsde_mix_gate_channels=fsde_mix_gate_channels,
+            fsde_gain_channels=fsde_gain_channels,
+            fsde_use_norm_act=fsde_use_norm_act,
+        )
+
+        self.boundary_skip_index = int(boundary_skip_index)
+        if self.boundary_skip_index not in self.core._skip_wrappers:
+            raise ValueError(
+                f"boundary_skip_index={self.boundary_skip_index} not found in UNet skips."
+            )
+        if self.boundary_skip_index not in set(int(x) for x in fsde_skip_indices):
+            raise ValueError(
+                f"boundary_skip_index={self.boundary_skip_index} must be included in fsde_skip_indices="
+                f"{tuple(int(x) for x in fsde_skip_indices)}."
+            )
+        if int(boundary_out_channels) <= 0:
+            raise ValueError(f"boundary_out_channels must be > 0, got {boundary_out_channels}")
+
+        boundary_in_channels = int(channels[self.boundary_skip_index - 1])
+        boundary_mid_channels = int(boundary_mid_channels)
+        if boundary_mid_channels <= 0:
+            boundary_mid_channels = max(16, boundary_in_channels // 2)
+
+        self.boundary_head = nn.Sequential(
+            nn.Conv3d(
+                boundary_in_channels,
+                boundary_mid_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.InstanceNorm3d(boundary_mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(
+                boundary_mid_channels,
+                int(boundary_out_channels),
+                kernel_size=1,
+                padding=0,
+                bias=True,
+            ),
+        )
+
+    def forward(self, image, **batch):
+        logits = self.core.net(image)
+        output = {"logits": logits}
+
+        # Boundary supervision is needed only during training.
+        if self.training:
+            wrapper = self.core._skip_wrappers.get(self.boundary_skip_index)
+            skip_feature = None if wrapper is None else wrapper.last_enhanced
+            if skip_feature is None:
+                raise RuntimeError(
+                    "Boundary head could not read skip feature. "
+                    "This usually means skip wrappers were not executed as expected."
+                )
+            boundary_logits = self.boundary_head(skip_feature)
+            if tuple(boundary_logits.shape[2:]) != tuple(logits.shape[2:]):
+                boundary_logits = F.interpolate(
+                    boundary_logits,
+                    size=logits.shape[2:],
+                    mode="trilinear",
+                    align_corners=False,
+                )
+            output["boundary_logits"] = boundary_logits
+        return output
 
     def __str__(self):
         all_parameters = sum(parameter.numel() for parameter in self.parameters())

@@ -187,6 +187,113 @@ class DiceFocalSegLossWithDRBDCommit(DiceFocalSegLoss):
         return output
 
 
+class DiceFocalSegLossWithBoundary(DiceFocalSegLoss):
+    """
+    DiceFocalSegLoss + boundary supervision.
+
+    Expected additional model output key:
+      - boundary_logits: [B, 1, D, H, W] (or [B, K, D, H, W])
+
+    Boundary target is generated online from segmentation labels via
+    morphological gradient band:
+      B_gt = dilation(M) - erosion(M)
+    where M is whole-tumor mask.
+    """
+
+    def __init__(
+        self,
+        boundary_loss_weight=0.1,
+        boundary_bce_weight=1.0,
+        boundary_dice_weight=1.0,
+        boundary_radius=1,
+        boundary_channel_index=1,
+        boundary_smooth=1e-5,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.boundary_loss_weight = float(boundary_loss_weight)
+        self.boundary_bce_weight = float(boundary_bce_weight)
+        self.boundary_dice_weight = float(boundary_dice_weight)
+        self.boundary_radius = int(boundary_radius)
+        self.boundary_channel_index = int(boundary_channel_index)
+        self.boundary_smooth = float(boundary_smooth)
+
+    def _extract_tumor_mask(self, label: torch.Tensor) -> torch.Tensor:
+        """
+        Convert BraTS label tensor to single-channel whole-tumor mask [B,1,D,H,W].
+        """
+        if label.ndim != 5:
+            raise ValueError(
+                f"Boundary loss expects label [B,C,D,H,W], got {tuple(label.shape)}"
+            )
+        if label.shape[1] == 1:
+            return (label > 0).float()
+
+        ch = self.boundary_channel_index
+        if ch < 0 or ch >= int(label.shape[1]):
+            ch = min(1, int(label.shape[1]) - 1)
+        return (label[:, ch : ch + 1] > 0.5).float()
+
+    def _boundary_band(self, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Binary boundary band from morphological gradient.
+        """
+        radius = max(0, self.boundary_radius)
+        if radius == 0:
+            return mask
+        kernel = 2 * radius + 1
+        dil = F.max_pool3d(mask, kernel_size=kernel, stride=1, padding=radius)
+        ero = -F.max_pool3d(-mask, kernel_size=kernel, stride=1, padding=radius)
+        band = (dil - ero).clamp(0.0, 1.0)
+        return (band > 0.5).float()
+
+    def _soft_dice_loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        prob = torch.sigmoid(logits)
+        reduce_dims = tuple(range(2, prob.ndim))
+        inter = (prob * target).sum(dim=reduce_dims)
+        den = prob.sum(dim=reduce_dims) + target.sum(dim=reduce_dims)
+        dice = (2.0 * inter + self.boundary_smooth) / (den + self.boundary_smooth)
+        return 1.0 - dice.mean()
+
+    def _boundary_loss(self, boundary_logits: torch.Tensor, label: torch.Tensor):
+        target_mask = self._extract_tumor_mask(label)
+        target_boundary = self._boundary_band(target_mask)
+
+        if tuple(boundary_logits.shape[2:]) != tuple(target_boundary.shape[2:]):
+            boundary_logits = F.interpolate(
+                boundary_logits,
+                size=target_boundary.shape[2:],
+                mode="trilinear",
+                align_corners=False,
+            )
+        if int(boundary_logits.shape[1]) != int(target_boundary.shape[1]):
+            # For K-channel boundary prediction, repeat the single boundary target.
+            target_boundary = target_boundary.repeat(1, int(boundary_logits.shape[1]), 1, 1, 1)
+
+        bce = F.binary_cross_entropy_with_logits(boundary_logits, target_boundary)
+        dice = self._soft_dice_loss(boundary_logits, target_boundary)
+        total = self.boundary_bce_weight * bce + self.boundary_dice_weight * dice
+        return total, bce, dice
+
+    def forward(self, logits, label, aux_logits=None, boundary_logits=None, **batch):
+        output = super().forward(logits=logits, label=label, aux_logits=aux_logits, **batch)
+
+        boundary_total = logits.new_tensor(0.0)
+        boundary_bce = logits.new_tensor(0.0)
+        boundary_dice = logits.new_tensor(0.0)
+        if boundary_logits is not None and self.boundary_loss_weight > 0.0:
+            boundary_total, boundary_bce, boundary_dice = self._boundary_loss(
+                boundary_logits=boundary_logits,
+                label=label,
+            )
+            output["loss"] = output["loss"] + self.boundary_loss_weight * boundary_total
+
+        output["loss_boundary"] = boundary_total.detach()
+        output["loss_boundary_bce"] = boundary_bce.detach()
+        output["loss_boundary_dice"] = boundary_dice.detach()
+        return output
+
+
 class GeneralizedDiceFocalSegLoss(nn.Module):
     """
     Generalized Dice Focal Loss (GDFL) inspired by:

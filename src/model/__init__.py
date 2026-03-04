@@ -50,7 +50,7 @@ from src.model.segresnet import SegResNet3D
 from src.model.swinclnet import SwinCLNet3D
 from src.model.swin_unetr import SwinUNETRSegModel
 from src.model.unetr import UNETR3D
-from src.model.unet3d import UNet3D, UNet3DFullDualBandFSDE34
+from src.model.unet3d import UNet3D, UNet3DFullDualBandFSDE34, UNet3DFullDualBandFSDE34Boundary
 
 __all__ = [
     "BaselineModel",
@@ -103,4 +103,5 @@ __all__ = [
     "UNETR3D",
     "UNet3D",
     "UNet3DFullDualBandFSDE34",
+    "UNet3DFullDualBandFSDE34Boundary",
 ]
