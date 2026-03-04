@@ -993,3 +993,183 @@ class UNet3DDecoderDualRouteFSDEGN(nn.Module):
         info += f"\nAll parameters: {all_parameters}"
         info += f"\nTrainable parameters: {trainable_parameters}"
         return info
+
+
+class UNet3DBottleneckDualRouteFSDEGN(nn.Module):
+    """
+    3D UNet ablation:
+    - Encoder: plain ConvGNBlock3D
+    - Bottleneck: DualRouteFSDEBlock3D
+    - Decoder: plain ConvGNBlock3D
+    - Skip fusion: direct concatenation
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__()
+        if len(channels) != 5:
+            raise ValueError(f"channels must contain 5 values, got {tuple(channels)}")
+        c1, c2, c3, c4, c5 = (int(v) for v in channels)
+
+        self.enc1 = ConvGNBlock3D(in_channels, c1, gn_groups=gn_groups)
+        self.down1 = nn.Conv3d(c1, c2, kernel_size=2, stride=2, bias=False)
+        self.enc2 = ConvGNBlock3D(c2, c2, gn_groups=gn_groups)
+        self.down2 = nn.Conv3d(c2, c3, kernel_size=2, stride=2, bias=False)
+        self.enc3 = ConvGNBlock3D(c3, c3, gn_groups=gn_groups)
+        self.down3 = nn.Conv3d(c3, c4, kernel_size=2, stride=2, bias=False)
+        self.enc4 = ConvGNBlock3D(c4, c4, gn_groups=gn_groups)
+        self.down4 = nn.Conv3d(c4, c5, kernel_size=2, stride=2, bias=False)
+
+        self.bottleneck = DualRouteFSDEBlock3D(
+            c5,
+            c5,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+        )
+
+        self.up4 = nn.ConvTranspose3d(c5, c4, kernel_size=2, stride=2)
+        self.dec4 = ConvGNBlock3D(c4 + c4, c4, gn_groups=gn_groups)
+        self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
+        self.dec3 = ConvGNBlock3D(c3 + c3, c3, gn_groups=gn_groups)
+        self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
+        self.dec2 = ConvGNBlock3D(c2 + c2, c2, gn_groups=gn_groups)
+        self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
+        self.dec1 = ConvGNBlock3D(c1 + c1, c1, gn_groups=gn_groups)
+
+        self.head = nn.Conv3d(c1, out_channels, kernel_size=1, bias=True)
+
+    @staticmethod
+    def _concat_skip(upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        if tuple(upsampled.shape[-3:]) != tuple(skip.shape[-3:]):
+            upsampled = F.interpolate(
+                upsampled,
+                size=skip.shape[-3:],
+                mode="trilinear",
+                align_corners=False,
+            )
+        return torch.cat([skip, upsampled], dim=1)
+
+    def forward(self, image, **batch):
+        e1 = self.enc1(image)
+        e2 = self.enc2(self.down1(e1))
+        e3 = self.enc3(self.down2(e2))
+        e4 = self.enc4(self.down3(e3))
+        b = self.bottleneck(self.down4(e4))
+
+        d4 = self.dec4(self._concat_skip(self.up4(b), e4))
+        d3 = self.dec3(self._concat_skip(self.up3(d4), e3))
+        d2 = self.dec2(self._concat_skip(self.up2(d3), e2))
+        d1 = self.dec1(self._concat_skip(self.up1(d2), e1))
+        logits = self.head(d1)
+        return {"logits": logits}
+
+    def __str__(self):
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
+
+
+class UNet3DSkip2DualRouteFSDEGN(nn.Module):
+    """
+    3D UNet ablation:
+    - Encoder: plain ConvGNBlock3D
+    - Bottleneck: plain ConvGNBlock3D
+    - Decoder: plain ConvGNBlock3D
+    - Only skip2 feature is refined by one DualRouteFSDEBlock3D before fusion.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__()
+        if len(channels) != 5:
+            raise ValueError(f"channels must contain 5 values, got {tuple(channels)}")
+        c1, c2, c3, c4, c5 = (int(v) for v in channels)
+
+        self.enc1 = ConvGNBlock3D(in_channels, c1, gn_groups=gn_groups)
+        self.down1 = nn.Conv3d(c1, c2, kernel_size=2, stride=2, bias=False)
+        self.enc2 = ConvGNBlock3D(c2, c2, gn_groups=gn_groups)
+        self.down2 = nn.Conv3d(c2, c3, kernel_size=2, stride=2, bias=False)
+        self.enc3 = ConvGNBlock3D(c3, c3, gn_groups=gn_groups)
+        self.down3 = nn.Conv3d(c3, c4, kernel_size=2, stride=2, bias=False)
+        self.enc4 = ConvGNBlock3D(c4, c4, gn_groups=gn_groups)
+        self.down4 = nn.Conv3d(c4, c5, kernel_size=2, stride=2, bias=False)
+        self.bottleneck = ConvGNBlock3D(c5, c5, gn_groups=gn_groups)
+
+        self.skip2_refine = DualRouteFSDEBlock3D(
+            c2,
+            c2,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+        )
+
+        self.up4 = nn.ConvTranspose3d(c5, c4, kernel_size=2, stride=2)
+        self.dec4 = ConvGNBlock3D(c4 + c4, c4, gn_groups=gn_groups)
+        self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
+        self.dec3 = ConvGNBlock3D(c3 + c3, c3, gn_groups=gn_groups)
+        self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
+        self.dec2 = ConvGNBlock3D(c2 + c2, c2, gn_groups=gn_groups)
+        self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
+        self.dec1 = ConvGNBlock3D(c1 + c1, c1, gn_groups=gn_groups)
+
+        self.head = nn.Conv3d(c1, out_channels, kernel_size=1, bias=True)
+
+    @staticmethod
+    def _concat_skip(upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        if tuple(upsampled.shape[-3:]) != tuple(skip.shape[-3:]):
+            upsampled = F.interpolate(
+                upsampled,
+                size=skip.shape[-3:],
+                mode="trilinear",
+                align_corners=False,
+            )
+        return torch.cat([skip, upsampled], dim=1)
+
+    def forward(self, image, **batch):
+        e1 = self.enc1(image)
+        e2 = self.enc2(self.down1(e1))
+        e3 = self.enc3(self.down2(e2))
+        e4 = self.enc4(self.down3(e3))
+        b = self.bottleneck(self.down4(e4))
+
+        d4 = self.dec4(self._concat_skip(self.up4(b), e4))
+        d3 = self.dec3(self._concat_skip(self.up3(d4), e3))
+        e2_skip = self.skip2_refine(e2)
+        d2 = self.dec2(self._concat_skip(self.up2(d3), e2_skip))
+        d1 = self.dec1(self._concat_skip(self.up1(d2), e1))
+        logits = self.head(d1)
+        return {"logits": logits}
+
+    def __str__(self):
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
