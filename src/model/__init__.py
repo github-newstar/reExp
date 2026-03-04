@@ -52,6 +52,7 @@ from src.model.swin_unetr import SwinUNETRSegModel
 from src.model.unetr import UNETR3D
 from src.model.unet3d import (
     UNet3D,
+    UNet3DDualRouteFSDEDWTBottleneckGN,
     UNet3DEncoderDualRouteFSDEGN,
     UNet3DDualRouteFSDEGN,
     UNet3DDualRouteFSDEGNSkip4FSDE,
@@ -109,6 +110,7 @@ __all__ = [
     "SwinUNETRSegModel",
     "UNETR3D",
     "UNet3D",
+    "UNet3DDualRouteFSDEDWTBottleneckGN",
     "UNet3DEncoderDualRouteFSDEGN",
     "UNet3DDualRouteFSDEGN",
     "UNet3DDualRouteFSDEGNSkip4FSDE",

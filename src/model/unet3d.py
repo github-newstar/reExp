@@ -548,6 +548,101 @@ class ConvGNBlock3D(nn.Module):
         return self.block(x)
 
 
+class HaarDWT3D(nn.Module):
+    """
+    Single-level 3D Haar DWT.
+
+    Returns:
+      - ll: [B, C, D/2, H/2, W/2]
+      - hf: [B, C, 7, D/2, H/2, W/2]
+    """
+
+    def __init__(self):
+        super().__init__()
+        inv_sqrt2 = 2.0 ** (-0.5)
+        low = torch.tensor([inv_sqrt2, inv_sqrt2], dtype=torch.float32)
+        high = torch.tensor([inv_sqrt2, -inv_sqrt2], dtype=torch.float32)
+        one_d = [low, high]
+
+        combos = [
+            (0, 0, 0),  # LLL
+            (0, 0, 1),
+            (0, 1, 0),
+            (0, 1, 1),
+            (1, 0, 0),
+            (1, 0, 1),
+            (1, 1, 0),
+            (1, 1, 1),
+        ]
+        kernels = []
+        for kz, ky, kx in combos:
+            k = (
+                one_d[kz][:, None, None]
+                * one_d[ky][None, :, None]
+                * one_d[kx][None, None, :]
+            )
+            kernels.append(k)
+        base = torch.stack(kernels, dim=0)  # [8, 2, 2, 2]
+        self.register_buffer("base_filters", base)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if x.ndim != 5:
+            raise ValueError(f"HaarDWT3D expects [B,C,D,H,W], got {tuple(x.shape)}")
+        b, c, d, h, w = x.shape
+        pad_d = int(d % 2)
+        pad_h = int(h % 2)
+        pad_w = int(w % 2)
+        if pad_d or pad_h or pad_w:
+            x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d), mode="replicate")
+
+        weight = self.base_filters.to(dtype=x.dtype, device=x.device).unsqueeze(1)
+        weight = weight.repeat(int(c), 1, 1, 1, 1)  # [8C,1,2,2,2]
+        subbands = F.conv3d(x, weight, stride=2, padding=0, groups=int(c))
+        d2, h2, w2 = subbands.shape[-3:]
+        subbands = subbands.view(b, c, 8, d2, h2, w2)
+
+        ll = subbands[:, :, 0, :, :, :]
+        hf = subbands[:, :, 1:, :, :, :]
+        return ll, hf
+
+
+class DWTLLGuidedBottleneck3D(nn.Module):
+    """
+    DWT bottleneck with LL-guided residual injection:
+      LL, HF = DWT(X)
+      LL' = f(LL)
+      Y = X + g(upsample(LL'))
+    """
+
+    def __init__(self, channels: int, gn_groups: int = 8):
+        super().__init__()
+        ch = int(channels)
+        self.dwt = HaarDWT3D()
+        g = _resolve_gn_groups(ch, gn_groups)
+        self.ll_process = nn.Sequential(
+            nn.Conv3d(ch, ch, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(g, ch),
+            nn.SiLU(inplace=True),
+        )
+        self.ll_project = nn.Sequential(
+            nn.Conv3d(ch, ch, kernel_size=1, bias=False),
+            nn.GroupNorm(g, ch),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        ll, _ = self.dwt(x)
+        ll_feat = self.ll_process(ll)
+        ll_up = F.interpolate(
+            ll_feat,
+            size=x.shape[2:],
+            mode="trilinear",
+            align_corners=False,
+        )
+        guide = self.ll_project(ll_up)
+        return x + guide
+
+
 class UNet3DDualRouteFSDEGN(nn.Module):
     """
     3D UNet variant where all encoder/decoder stages use dual-route FSDE blocks.
@@ -684,6 +779,38 @@ class UNet3DDualRouteFSDEGNSkip4FSDE(UNet3DDualRouteFSDEGN):
         d1 = self.dec1(self._concat_skip(self.up1(d2), e1))
         logits = self.head(d1)
         return {"logits": logits}
+
+
+class UNet3DDualRouteFSDEDWTBottleneckGN(UNet3DDualRouteFSDEGN):
+    """
+    3D UNet variant:
+    - Encoder: DualRouteFSDEBlock3D
+    - Bottleneck: DWT LL-guided residual bottleneck
+    - Decoder: DualRouteFSDEBlock3D
+    - Skip fusion: direct concatenation
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            channels=channels,
+            gn_groups=gn_groups,
+            fsde_alpha=fsde_alpha,
+            fsde_alpha_max=fsde_alpha_max,
+            freq_kernel_size=freq_kernel_size,
+        )
+        c5 = int(channels[4])
+        self.bottleneck = DWTLLGuidedBottleneck3D(channels=c5, gn_groups=gn_groups)
 
 
 class UNet3DEncoderDualRouteFSDEGN(nn.Module):
