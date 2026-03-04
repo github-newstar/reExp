@@ -5,18 +5,18 @@ train:
     image_key: "image"
     label_key: "label"
     prob: 0.25
-    max_insertions: 1
-    second_insertion_prob: 0.0
+    max_insertions: 2
+    second_insertion_prob: 0.35
     scale_range: [0.6, 0.9]
-    flip_prob: 0.3
-    rot90_prob: 0.3
+    flip_prob: 0.5
+    rot90_prob: 0.5
     small_donor_bias: 1.0
     min_insert_voxels: 24
     min_distance_to_tumor: 6
-    blend_band_width: 2
-    blend_smooth_steps: 0
-    intensity_match: false
-    max_position_trials: 8
+    blend_band_width: 3
+    blend_smooth_steps: 1
+    intensity_match: true
+    max_position_trials: 16
     cache_on_device: true
 
 inference: null

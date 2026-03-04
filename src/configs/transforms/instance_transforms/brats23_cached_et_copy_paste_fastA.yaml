@@ -18,7 +18,7 @@ train:
       prob: 0.25
       max_insertions: 1
       second_insertion_prob: 0.0
-      scale_range: [0.8, 1.0]
+      scale_range: [0.6, 0.9]
       flip_prob: 0.3
       rot90_prob: 0.3
       small_donor_bias: 1.0

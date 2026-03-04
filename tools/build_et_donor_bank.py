@@ -243,6 +243,15 @@ def parse_args():
         help="Maximum ET voxels per donor component (<=0 to disable).",
     )
     parser.add_argument(
+        "--max-et-percentile",
+        type=float,
+        default=25.0,
+        help=(
+            "Keep only donors with ET voxels <= this percentile (default: 25, i.e. V25). "
+            "Set <0 to disable percentile filtering."
+        ),
+    )
+    parser.add_argument(
         "--max-donors",
         type=int,
         default=300,
@@ -283,6 +292,7 @@ def main():
     )
 
     donors = []
+    donor_et_voxels = []
     case_count = 0
     for record in tqdm(part_index, desc="Building ET donors"):
         vector_path = _resolve_vector_path(cache_dir=cache_dir, record=record)
@@ -327,16 +337,33 @@ def main():
                     "case_id": str(record.get("case_id", vector_path.stem)),
                     "image": image_crop.contiguous(),
                     "mask_et": mask_crop.contiguous(),
+                    "mask_wt": (scalar[z0:z1, y0:y1, x0:x1] > 0).to(torch.uint8).contiguous(),
+                    "mask_tc": (
+                        ((scalar[z0:z1, y0:y1, x0:x1] == 1) | (scalar[z0:z1, y0:y1, x0:x1] == 3))
+                        .to(torch.uint8)
+                        .contiguous()
+                    ),
                     "et_voxels": int(et_voxels),
                     "bbox_size": [int(z1 - z0), int(y1 - y0), int(x1 - x0)],
                 }
             )
+            donor_et_voxels.append(int(et_voxels))
 
     if len(donors) == 0:
         raise RuntimeError(
             "No ET donors were extracted. "
             "Try lowering --min-et-voxels or increasing --max-et-voxels."
         )
+
+    if float(args.max_et_percentile) >= 0 and len(donor_et_voxels) > 0:
+        q = float(args.max_et_percentile)
+        threshold = int(round(torch.quantile(torch.tensor(donor_et_voxels, dtype=torch.float32), q / 100.0).item()))
+        donors = [item for item in donors if int(item["et_voxels"]) <= threshold]
+        if len(donors) == 0:
+            raise RuntimeError(
+                f"Percentile filter removed all donors (percentile={q}, threshold={threshold}). "
+                "Try increasing --max-et-percentile or disable with --max-et-percentile -1."
+            )
 
     donors.sort(key=lambda item: int(item["et_voxels"]))
     if int(args.max_donors) > 0:

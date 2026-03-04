@@ -207,6 +207,12 @@ class RandETCopyPasted(MapTransform):
                 {
                     "image": image.float().cpu().contiguous(),
                     "mask_et": mask.cpu().contiguous(),
+                    "mask_wt": (torch.as_tensor(item.get("mask_wt", mask)) > 0)
+                    .cpu()
+                    .contiguous(),
+                    "mask_tc": (torch.as_tensor(item.get("mask_tc", mask)) > 0)
+                    .cpu()
+                    .contiguous(),
                     "et_voxels": et_voxels,
                     "case_id": str(item.get("case_id", "")),
                 }
@@ -237,14 +243,24 @@ class RandETCopyPasted(MapTransform):
     def _sample_donor(self):
         idx = int(torch.multinomial(self._donor_weights, num_samples=1).item())
         donor = self._donors[idx]
-        return donor["image"].clone(), donor["mask_et"].clone()
+        return (
+            donor["image"].clone(),
+            {
+                "et": donor["mask_et"].clone(),
+                "wt": donor["mask_wt"].clone(),
+                "tc": donor["mask_tc"].clone(),
+            },
+        )
 
     def _augment_donor(
-        self, donor_image: torch.Tensor, donor_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, donor_image: torch.Tensor, donor_masks: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        donor_et = donor_masks["et"]
+        donor_wt = donor_masks["wt"]
+        donor_tc = donor_masks["tc"]
         scale = float(torch.empty(1).uniform_(self.scale_low, self.scale_high).item())
         if abs(scale - 1.0) > 1e-3:
-            d, h, w = (int(x) for x in donor_mask.shape)
+            d, h, w = (int(x) for x in donor_et.shape)
             out_size = (
                 max(1, int(round(d * scale))),
                 max(1, int(round(h * scale))),
@@ -256,9 +272,25 @@ class RandETCopyPasted(MapTransform):
                 mode="trilinear",
                 align_corners=False,
             )[0]
-            donor_mask = (
+            donor_et = (
                 F.interpolate(
-                    donor_mask.float().unsqueeze(0).unsqueeze(0),
+                    donor_et.float().unsqueeze(0).unsqueeze(0),
+                    size=out_size,
+                    mode="nearest",
+                )[0, 0]
+                > 0.5
+            )
+            donor_wt = (
+                F.interpolate(
+                    donor_wt.float().unsqueeze(0).unsqueeze(0),
+                    size=out_size,
+                    mode="nearest",
+                )[0, 0]
+                > 0.5
+            )
+            donor_tc = (
+                F.interpolate(
+                    donor_tc.float().unsqueeze(0).unsqueeze(0),
                     size=out_size,
                     mode="nearest",
                 )[0, 0]
@@ -268,15 +300,23 @@ class RandETCopyPasted(MapTransform):
         for axis in range(3):
             if float(torch.rand(1).item()) < self.flip_prob:
                 donor_image = torch.flip(donor_image, dims=[axis + 1])
-                donor_mask = torch.flip(donor_mask, dims=[axis])
+                donor_et = torch.flip(donor_et, dims=[axis])
+                donor_wt = torch.flip(donor_wt, dims=[axis])
+                donor_tc = torch.flip(donor_tc, dims=[axis])
 
         if float(torch.rand(1).item()) < self.rot90_prob:
             plane = [(0, 1), (0, 2), (1, 2)][int(torch.randint(0, 3, (1,)).item())]
             k = int(torch.randint(1, 4, (1,)).item())
             donor_image = torch.rot90(donor_image, k=k, dims=[plane[0] + 1, plane[1] + 1])
-            donor_mask = torch.rot90(donor_mask, k=k, dims=list(plane))
+            donor_et = torch.rot90(donor_et, k=k, dims=list(plane))
+            donor_wt = torch.rot90(donor_wt, k=k, dims=list(plane))
+            donor_tc = torch.rot90(donor_tc, k=k, dims=list(plane))
 
-        return donor_image, donor_mask > 0
+        # Enforce hierarchy: ET subset TC subset WT.
+        donor_et = donor_et > 0
+        donor_tc = (donor_tc > 0) | donor_et
+        donor_wt = (donor_wt > 0) | donor_tc
+        return donor_image, {"et": donor_et, "wt": donor_wt, "tc": donor_tc}
 
     @staticmethod
     def _compute_overlap(
@@ -315,11 +355,14 @@ class RandETCopyPasted(MapTransform):
     def _find_valid_placement(
         self,
         scalar_label: torch.Tensor,
-        donor_mask: torch.Tensor,
+        donor_masks: dict[str, torch.Tensor],
         dilated_tumor: torch.Tensor,
     ):
         d, h, w = (int(x) for x in scalar_label.shape)
-        source_shape = tuple(int(x) for x in donor_mask.shape)
+        donor_wt = donor_masks["wt"]
+        donor_et = donor_masks["et"]
+        donor_tc = donor_masks["tc"]
+        source_shape = tuple(int(x) for x in donor_wt.shape)
         target_shape = (d, h, w)
 
         for _ in range(self.max_position_trials):
@@ -352,13 +395,17 @@ class RandETCopyPasted(MapTransform):
             ) = overlap
 
             target_region = scalar_label[z0:z1, y0:y1, x0:x1]
-            source_region = donor_mask[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
+            source_wt = donor_wt[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
+            source_et = donor_et[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
+            source_tc = donor_tc[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
 
-            valid = source_region & (target_region == 0)
+            valid_wt = source_wt & (target_region == 0)
             if self.min_distance_to_tumor > 0:
-                valid = valid & (~dilated_tumor[z0:z1, y0:y1, x0:x1])
+                valid_wt = valid_wt & (~dilated_tumor[z0:z1, y0:y1, x0:x1])
+            valid_et = source_et & valid_wt
+            valid_tc = source_tc & valid_wt
 
-            if int(valid.sum().item()) >= self.min_insert_voxels:
+            if int(valid_et.sum().item()) >= self.min_insert_voxels:
                 return {
                     "z0": z0,
                     "z1": z1,
@@ -372,7 +419,9 @@ class RandETCopyPasted(MapTransform):
                     "src_y1": src_y1,
                     "src_x0": src_x0,
                     "src_x1": src_x1,
-                    "valid": valid,
+                    "valid_wt": valid_wt,
+                    "valid_tc": valid_tc,
+                    "valid_et": valid_et,
                 }
 
         return None
@@ -446,11 +495,11 @@ class RandETCopyPasted(MapTransform):
 
         n_insert = self._sample_num_insertions()
         for _ in range(n_insert):
-            donor_image, donor_mask = self._sample_donor()
-            donor_image, donor_mask = self._augment_donor(donor_image, donor_mask)
+            donor_image, donor_masks = self._sample_donor()
+            donor_image, donor_masks = self._augment_donor(donor_image, donor_masks)
             placement = self._find_valid_placement(
                 scalar_label=scalar_label,
-                donor_mask=donor_mask,
+                donor_masks=donor_masks,
                 dilated_tumor=dilated_tumor,
             )
             if placement is None:
@@ -462,7 +511,9 @@ class RandETCopyPasted(MapTransform):
             src_z0, src_z1 = placement["src_z0"], placement["src_z1"]
             src_y0, src_y1 = placement["src_y0"], placement["src_y1"]
             src_x0, src_x1 = placement["src_x0"], placement["src_x1"]
-            valid = placement["valid"]
+            valid_wt = placement["valid_wt"]
+            valid_tc = placement["valid_tc"]
+            valid_et = placement["valid_et"]
 
             target_region = image[:, z0:z1, y0:y1, x0:x1]
             donor_region = donor_image[
@@ -475,15 +526,19 @@ class RandETCopyPasted(MapTransform):
                 donor_region = self._match_intensity(
                     donor_region=donor_region,
                     target_region=target_region,
-                    valid_mask=valid,
+                    valid_mask=valid_wt,
                 )
 
-            soft_mask = self._build_soft_mask(valid).unsqueeze(0)
+            soft_mask = self._build_soft_mask(valid_wt).unsqueeze(0)
             image[:, z0:z1, y0:y1, x0:x1] = (
                 target_region * (1.0 - soft_mask) + donor_region * soft_mask
             )
             scalar_label_region = scalar_label[z0:z1, y0:y1, x0:x1].clone()
-            scalar_label_region[valid] = 3
+            # Keep hierarchy WT ⊇ TC ⊇ ET in scalar space:
+            # WT-only -> 2, TC -> 1, ET -> 3 (ET overrides TC/WT).
+            scalar_label_region[valid_wt] = 2
+            scalar_label_region[valid_tc] = 1
+            scalar_label_region[valid_et] = 3
             scalar_label[z0:z1, y0:y1, x0:x1] = scalar_label_region
 
             tumor_mask = scalar_label > 0
@@ -688,6 +743,12 @@ class RandETCopyPasteBatch(nn.Module):
                 {
                     "image": image.float().cpu().contiguous(),
                     "mask_et": mask.cpu().contiguous(),
+                    "mask_wt": (torch.as_tensor(item.get("mask_wt", mask)) > 0)
+                    .cpu()
+                    .contiguous(),
+                    "mask_tc": (torch.as_tensor(item.get("mask_tc", mask)) > 0)
+                    .cpu()
+                    .contiguous(),
                 }
             )
             volumes.append(et_voxels)
@@ -715,6 +776,8 @@ class RandETCopyPasteBatch(nn.Module):
             {
                 "image": donor["image"].to(device, non_blocking=True),
                 "mask_et": donor["mask_et"].to(device, non_blocking=True),
+                "mask_wt": donor["mask_wt"].to(device, non_blocking=True),
+                "mask_tc": donor["mask_tc"].to(device, non_blocking=True),
             }
             for donor in self._donors_cpu
         ]
@@ -730,25 +793,41 @@ class RandETCopyPasteBatch(nn.Module):
                 break
         return n
 
-    def _sample_donor(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    def _sample_donor(
+        self, device: torch.device
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         if self.cache_on_device:
             idx = int(torch.multinomial(self._donor_weights_device, num_samples=1).item())
             donor = self._donors_device[idx]
-            return donor["image"].clone(), donor["mask_et"].clone()
+            return (
+                donor["image"].clone(),
+                {
+                    "et": donor["mask_et"].clone(),
+                    "wt": donor["mask_wt"].clone(),
+                    "tc": donor["mask_tc"].clone(),
+                },
+            )
 
         idx = int(torch.multinomial(self._donor_weights_cpu, num_samples=1).item())
         donor = self._donors_cpu[idx]
         return (
             donor["image"].to(device, non_blocking=True),
-            donor["mask_et"].to(device, non_blocking=True),
+            {
+                "et": donor["mask_et"].to(device, non_blocking=True),
+                "wt": donor["mask_wt"].to(device, non_blocking=True),
+                "tc": donor["mask_tc"].to(device, non_blocking=True),
+            },
         )
 
     def _augment_donor(
-        self, donor_image: torch.Tensor, donor_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, donor_image: torch.Tensor, donor_masks: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        donor_et = donor_masks["et"]
+        donor_wt = donor_masks["wt"]
+        donor_tc = donor_masks["tc"]
         scale = random.uniform(self.scale_low, self.scale_high)
         if abs(scale - 1.0) > 1e-3:
-            d, h, w = (int(x) for x in donor_mask.shape)
+            d, h, w = (int(x) for x in donor_et.shape)
             out_size = (
                 max(1, int(round(d * scale))),
                 max(1, int(round(h * scale))),
@@ -760,9 +839,25 @@ class RandETCopyPasteBatch(nn.Module):
                 mode="trilinear",
                 align_corners=False,
             )[0]
-            donor_mask = (
+            donor_et = (
                 F.interpolate(
-                    donor_mask.float().unsqueeze(0).unsqueeze(0),
+                    donor_et.float().unsqueeze(0).unsqueeze(0),
+                    size=out_size,
+                    mode="nearest",
+                )[0, 0]
+                > 0.5
+            )
+            donor_wt = (
+                F.interpolate(
+                    donor_wt.float().unsqueeze(0).unsqueeze(0),
+                    size=out_size,
+                    mode="nearest",
+                )[0, 0]
+                > 0.5
+            )
+            donor_tc = (
+                F.interpolate(
+                    donor_tc.float().unsqueeze(0).unsqueeze(0),
                     size=out_size,
                     mode="nearest",
                 )[0, 0]
@@ -772,15 +867,22 @@ class RandETCopyPasteBatch(nn.Module):
         for axis in range(3):
             if random.random() < self.flip_prob:
                 donor_image = torch.flip(donor_image, dims=[axis + 1])
-                donor_mask = torch.flip(donor_mask, dims=[axis])
+                donor_et = torch.flip(donor_et, dims=[axis])
+                donor_wt = torch.flip(donor_wt, dims=[axis])
+                donor_tc = torch.flip(donor_tc, dims=[axis])
 
         if random.random() < self.rot90_prob:
             plane = [(0, 1), (0, 2), (1, 2)][random.randrange(3)]
             k = random.randrange(1, 4)
             donor_image = torch.rot90(donor_image, k=k, dims=[plane[0] + 1, plane[1] + 1])
-            donor_mask = torch.rot90(donor_mask, k=k, dims=list(plane))
+            donor_et = torch.rot90(donor_et, k=k, dims=list(plane))
+            donor_wt = torch.rot90(donor_wt, k=k, dims=list(plane))
+            donor_tc = torch.rot90(donor_tc, k=k, dims=list(plane))
 
-        return donor_image, donor_mask > 0
+        donor_et = donor_et > 0
+        donor_tc = (donor_tc > 0) | donor_et
+        donor_wt = (donor_wt > 0) | donor_tc
+        return donor_image, {"et": donor_et, "wt": donor_wt, "tc": donor_tc}
 
     @staticmethod
     def _compute_overlap(
@@ -819,11 +921,14 @@ class RandETCopyPasteBatch(nn.Module):
     def _find_valid_placement(
         self,
         scalar_label: torch.Tensor,
-        donor_mask: torch.Tensor,
+        donor_masks: dict[str, torch.Tensor],
         dilated_tumor: torch.Tensor,
     ):
         d, h, w = (int(x) for x in scalar_label.shape)
-        source_shape = tuple(int(x) for x in donor_mask.shape)
+        donor_wt = donor_masks["wt"]
+        donor_et = donor_masks["et"]
+        donor_tc = donor_masks["tc"]
+        source_shape = tuple(int(x) for x in donor_wt.shape)
         target_shape = (d, h, w)
 
         for _ in range(self.max_position_trials):
@@ -855,12 +960,16 @@ class RandETCopyPasteBatch(nn.Module):
                 src_x1,
             ) = overlap
             target_region = scalar_label[z0:z1, y0:y1, x0:x1]
-            source_region = donor_mask[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
+            source_wt = donor_wt[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
+            source_et = donor_et[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
+            source_tc = donor_tc[src_z0:src_z1, src_y0:src_y1, src_x0:src_x1]
 
-            valid = source_region & (target_region == 0)
+            valid_wt = source_wt & (target_region == 0)
             if self.min_distance_to_tumor > 0:
-                valid = valid & (~dilated_tumor[z0:z1, y0:y1, x0:x1])
-            if int(valid.sum().item()) >= self.min_insert_voxels:
+                valid_wt = valid_wt & (~dilated_tumor[z0:z1, y0:y1, x0:x1])
+            valid_et = source_et & valid_wt
+            valid_tc = source_tc & valid_wt
+            if int(valid_et.sum().item()) >= self.min_insert_voxels:
                 return {
                     "z0": z0,
                     "z1": z1,
@@ -874,7 +983,9 @@ class RandETCopyPasteBatch(nn.Module):
                     "src_y1": src_y1,
                     "src_x0": src_x0,
                     "src_x1": src_x1,
-                    "valid": valid,
+                    "valid_wt": valid_wt,
+                    "valid_tc": valid_tc,
+                    "valid_et": valid_et,
                 }
         return None
 
@@ -968,11 +1079,11 @@ class RandETCopyPasteBatch(nn.Module):
 
             n_insert = self._sample_num_insertions()
             for _ in range(n_insert):
-                donor_image, donor_mask = self._sample_donor(device=device)
-                donor_image, donor_mask = self._augment_donor(donor_image, donor_mask)
+                donor_image, donor_masks = self._sample_donor(device=device)
+                donor_image, donor_masks = self._augment_donor(donor_image, donor_masks)
                 placement = self._find_valid_placement(
                     scalar_label=scalar_label,
-                    donor_mask=donor_mask,
+                    donor_masks=donor_masks,
                     dilated_tumor=dilated_tumor,
                 )
                 if placement is None:
@@ -984,7 +1095,9 @@ class RandETCopyPasteBatch(nn.Module):
                 src_z0, src_z1 = placement["src_z0"], placement["src_z1"]
                 src_y0, src_y1 = placement["src_y0"], placement["src_y1"]
                 src_x0, src_x1 = placement["src_x0"], placement["src_x1"]
-                valid = placement["valid"]
+                valid_wt = placement["valid_wt"]
+                valid_tc = placement["valid_tc"]
+                valid_et = placement["valid_et"]
 
                 target_region = sample_image[:, z0:z1, y0:y1, x0:x1]
                 donor_region = donor_image[
@@ -997,14 +1110,16 @@ class RandETCopyPasteBatch(nn.Module):
                     donor_region = self._match_intensity(
                         donor_region=donor_region,
                         target_region=target_region,
-                        valid_mask=valid,
+                        valid_mask=valid_wt,
                     )
-                soft_mask = self._build_soft_mask(valid).unsqueeze(0)
+                soft_mask = self._build_soft_mask(valid_wt).unsqueeze(0)
                 sample_image[:, z0:z1, y0:y1, x0:x1] = (
                     target_region * (1.0 - soft_mask) + donor_region * soft_mask
                 )
                 scalar_region = scalar_label[z0:z1, y0:y1, x0:x1].clone()
-                scalar_region[valid] = 3
+                scalar_region[valid_wt] = 2
+                scalar_region[valid_tc] = 1
+                scalar_region[valid_et] = 3
                 scalar_label[z0:z1, y0:y1, x0:x1] = scalar_region
 
                 tumor_mask = scalar_label > 0
