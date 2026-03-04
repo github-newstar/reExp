@@ -1,0 +1,52 @@
+defaults:
+  - brats23_swin_unetr_cached
+  - override model: unet3d_encoder_dualroute_fsde_gn
+  - _self_
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+  weight_decay: 1e-5
+
+lr_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${trainer.n_epochs}
+  eta_min: 1e-5
+
+writer:
+  run_name: unet3d_encoder_dualroute_fsde_gn_ep100_bs2_warm10_lr1e4_to_1e5_fullval_10_5_2
+
+dataloader:
+  batch_size: 2
+  num_workers: 8
+
+trainer:
+  n_epochs: 100
+  max_grad_norm: 1.0
+  eval_partitions: ["val"]
+  lr_scheduler_step_per: epoch
+  warmup:
+    enabled: true
+    epochs: 10
+    start_factor: 0.1
+    end_factor: 1.0
+  validation_policy:
+    enabled: true
+    default_mode: full
+    always_eval_epoch1: false
+    phases:
+      - max_epoch_ratio: 0.5
+        interval: 10
+        mode: full
+      - max_epoch_ratio: 0.8
+        interval: 5
+        mode: full
+      - max_epoch_ratio: 1.0
+        interval: 2
+        mode: full
+    full_eval:
+      enabled: false
+      interval: 0
+      epochs: []
+    post_training_full_eval:
+      enabled: false
