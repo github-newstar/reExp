@@ -322,6 +322,7 @@ class UNet3DFullDualBandFSDE34Boundary(nn.Module):
         boundary_skip_index: int = 4,
         boundary_mid_channels: int = 32,
         boundary_out_channels: int = 1,
+        boundary_head_eval: bool = True,
     ):
         super().__init__()
         self.core = UNet3DFullDualBandFSDE34(
@@ -341,6 +342,7 @@ class UNet3DFullDualBandFSDE34Boundary(nn.Module):
         )
 
         self.boundary_skip_index = int(boundary_skip_index)
+        self.boundary_head_eval = bool(boundary_head_eval)
         if self.boundary_skip_index not in self.core._skip_wrappers:
             raise ValueError(
                 f"boundary_skip_index={self.boundary_skip_index} not found in UNet skips."
@@ -381,8 +383,8 @@ class UNet3DFullDualBandFSDE34Boundary(nn.Module):
         logits = self.core.net(image)
         output = {"logits": logits}
 
-        # Boundary supervision is needed only during training.
-        if self.training:
+        # Emit boundary branch in training and optionally in eval.
+        if self.training or self.boundary_head_eval:
             wrapper = self.core._skip_wrappers.get(self.boundary_skip_index)
             skip_feature = None if wrapper is None else wrapper.last_enhanced
             if skip_feature is None:
@@ -400,6 +402,206 @@ class UNet3DFullDualBandFSDE34Boundary(nn.Module):
                 )
             output["boundary_logits"] = boundary_logits
         return output
+
+    def __str__(self):
+        all_parameters = sum(parameter.numel() for parameter in self.parameters())
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.parameters() if parameter.requires_grad
+        )
+        info = super().__str__()
+        info += f"\nAll parameters: {all_parameters}"
+        info += f"\nTrainable parameters: {trainable_parameters}"
+        return info
+
+
+def _resolve_gn_groups(num_channels: int, max_groups: int) -> int:
+    groups = max(1, min(int(max_groups), int(num_channels)))
+    while num_channels % groups != 0 and groups > 1:
+        groups -= 1
+    return groups
+
+
+class DualRouteFSDEBlock3D(nn.Module):
+    """
+    Dual-route FSDE block with GroupNorm.
+
+    Route A (spatial): Conv3x3 + GN + SiLU
+    Route B (frequency): Conv1x1 -> rFFT modulation -> iFFT
+    Fusion: concat(A, B) -> Conv1x1 + GN + SiLU + residual
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        gn_groups: int = 8,
+        alpha: float = 0.1,
+        alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__()
+        self.in_channels = int(in_channels)
+        self.out_channels = int(out_channels)
+        self.alpha_max = float(alpha_max)
+
+        if len(freq_kernel_size) != 3:
+            raise ValueError(
+                f"freq_kernel_size must be 3D, got {tuple(freq_kernel_size)}"
+            )
+        fd, fh, fw = (max(1, int(v)) for v in freq_kernel_size)
+
+        g_spatial = _resolve_gn_groups(self.out_channels, gn_groups)
+        g_fuse = _resolve_gn_groups(self.out_channels, gn_groups)
+
+        self.spatial = nn.Sequential(
+            nn.Conv3d(
+                self.in_channels,
+                self.out_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.GroupNorm(g_spatial, self.out_channels),
+            nn.SiLU(inplace=True),
+        )
+
+        self.freq_proj = nn.Sequential(
+            nn.Conv3d(self.in_channels, self.out_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(g_spatial, self.out_channels),
+            nn.SiLU(inplace=True),
+        )
+        self.weight_lf = nn.Parameter(torch.zeros(1, self.out_channels, fd, fh, fw))
+        self.weight_hf = nn.Parameter(torch.zeros(1, self.out_channels, fd, fh, fw))
+        self.mix_gate = nn.Conv3d(self.out_channels * 2, self.out_channels, kernel_size=1, bias=True)
+        self.sigmoid = nn.Sigmoid()
+        self.register_buffer("alpha", torch.tensor(float(alpha), dtype=torch.float32))
+
+        self.fuse = nn.Sequential(
+            nn.Conv3d(self.out_channels * 2, self.out_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(g_fuse, self.out_channels),
+            nn.SiLU(inplace=True),
+        )
+
+        if self.in_channels == self.out_channels:
+            self.residual = nn.Identity()
+        else:
+            self.residual = nn.Sequential(
+                nn.Conv3d(self.in_channels, self.out_channels, kernel_size=1, bias=False),
+                nn.GroupNorm(_resolve_gn_groups(self.out_channels, gn_groups), self.out_channels),
+            )
+
+    @staticmethod
+    def _resize_freq_weight(weight: torch.Tensor, target_shape: tuple[int, int, int]) -> torch.Tensor:
+        if tuple(weight.shape[-3:]) == tuple(target_shape):
+            return weight
+        return F.interpolate(weight, size=target_shape, mode="trilinear", align_corners=False)
+
+    def _alpha_value(self, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        value = self.alpha.to(dtype=dtype, device=device)
+        return torch.clamp(value, 0.0, self.alpha_max)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        spatial = self.spatial(x)
+
+        freq_feat = self.freq_proj(x).float()
+        spectrum = torch.fft.rfftn(freq_feat, dim=(2, 3, 4))
+        _, _, d_f, h_f, w_f = spectrum.shape
+        target_shape = (d_f, h_f, w_f)
+
+        w_lf = self._resize_freq_weight(self.weight_lf, target_shape)
+        w_hf = self._resize_freq_weight(self.weight_hf, target_shape)
+        alpha = self._alpha_value(dtype=w_lf.dtype, device=w_lf.device)
+        m_lf = 1.0 + alpha * torch.tanh(w_lf)
+        m_hf = 1.0 + alpha * torch.tanh(w_hf)
+
+        y_lf = torch.fft.irfftn(spectrum * m_lf, s=freq_feat.shape[2:], dim=(2, 3, 4))
+        y_hf = torch.fft.irfftn(spectrum * m_hf, s=freq_feat.shape[2:], dim=(2, 3, 4))
+        y_lf = y_lf.to(dtype=x.dtype)
+        y_hf = y_hf.to(dtype=x.dtype)
+
+        gate = self.sigmoid(self.mix_gate(torch.cat([y_lf, y_hf], dim=1)))
+        frequency = gate * y_hf + (1.0 - gate) * y_lf
+
+        fused = self.fuse(torch.cat([spatial, frequency], dim=1))
+        out = fused + self.residual(x)
+        return out
+
+
+class UNet3DDualRouteFSDEGN(nn.Module):
+    """
+    3D UNet variant where all encoder/decoder stages use dual-route FSDE blocks.
+    - Norm: GroupNorm
+    - Skip fusion: direct concatenation
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__()
+        if len(channels) != 5:
+            raise ValueError(f"channels must contain 5 values, got {tuple(channels)}")
+        c1, c2, c3, c4, c5 = (int(v) for v in channels)
+
+        self.enc1 = DualRouteFSDEBlock3D(
+            in_channels=in_channels,
+            out_channels=c1,
+            gn_groups=gn_groups,
+            alpha=fsde_alpha,
+            alpha_max=fsde_alpha_max,
+            freq_kernel_size=freq_kernel_size,
+        )
+        self.down1 = nn.Conv3d(c1, c2, kernel_size=2, stride=2, bias=False)
+        self.enc2 = DualRouteFSDEBlock3D(c2, c2, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.down2 = nn.Conv3d(c2, c3, kernel_size=2, stride=2, bias=False)
+        self.enc3 = DualRouteFSDEBlock3D(c3, c3, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.down3 = nn.Conv3d(c3, c4, kernel_size=2, stride=2, bias=False)
+        self.enc4 = DualRouteFSDEBlock3D(c4, c4, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.down4 = nn.Conv3d(c4, c5, kernel_size=2, stride=2, bias=False)
+
+        self.bottleneck = DualRouteFSDEBlock3D(c5, c5, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+
+        self.up4 = nn.ConvTranspose3d(c5, c4, kernel_size=2, stride=2)
+        self.dec4 = DualRouteFSDEBlock3D(c4 + c4, c4, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
+        self.dec3 = DualRouteFSDEBlock3D(c3 + c3, c3, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
+        self.dec2 = DualRouteFSDEBlock3D(c2 + c2, c2, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
+        self.dec1 = DualRouteFSDEBlock3D(c1 + c1, c1, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+
+        self.head = nn.Conv3d(c1, out_channels, kernel_size=1, bias=True)
+
+    @staticmethod
+    def _concat_skip(upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        if tuple(upsampled.shape[-3:]) != tuple(skip.shape[-3:]):
+            upsampled = F.interpolate(
+                upsampled,
+                size=skip.shape[-3:],
+                mode="trilinear",
+                align_corners=False,
+            )
+        return torch.cat([skip, upsampled], dim=1)
+
+    def forward(self, image, **batch):
+        e1 = self.enc1(image)
+        e2 = self.enc2(self.down1(e1))
+        e3 = self.enc3(self.down2(e2))
+        e4 = self.enc4(self.down3(e3))
+        b = self.bottleneck(self.down4(e4))
+
+        d4 = self.dec4(self._concat_skip(self.up4(b), e4))
+        d3 = self.dec3(self._concat_skip(self.up3(d4), e3))
+        d2 = self.dec2(self._concat_skip(self.up2(d3), e2))
+        d1 = self.dec1(self._concat_skip(self.up1(d2), e1))
+        logits = self.head(d1)
+        return {"logits": logits}
 
     def __str__(self):
         all_parameters = sum(parameter.numel() for parameter in self.parameters())

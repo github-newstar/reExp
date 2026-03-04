@@ -205,18 +205,22 @@ class DiceFocalSegLossWithBoundary(DiceFocalSegLoss):
         boundary_loss_weight=0.1,
         boundary_bce_weight=1.0,
         boundary_dice_weight=1.0,
+        boundary_bce_pos_weight=1.0,
         boundary_radius=1,
         boundary_channel_index=1,
         boundary_smooth=1e-5,
+        boundary_start_epoch=1,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.boundary_loss_weight = float(boundary_loss_weight)
         self.boundary_bce_weight = float(boundary_bce_weight)
         self.boundary_dice_weight = float(boundary_dice_weight)
+        self.boundary_bce_pos_weight = float(boundary_bce_pos_weight)
         self.boundary_radius = int(boundary_radius)
         self.boundary_channel_index = int(boundary_channel_index)
         self.boundary_smooth = float(boundary_smooth)
+        self.boundary_start_epoch = int(boundary_start_epoch)
 
     def _extract_tumor_mask(self, label: torch.Tensor) -> torch.Tensor:
         """
@@ -270,18 +274,36 @@ class DiceFocalSegLossWithBoundary(DiceFocalSegLoss):
             # For K-channel boundary prediction, repeat the single boundary target.
             target_boundary = target_boundary.repeat(1, int(boundary_logits.shape[1]), 1, 1, 1)
 
-        bce = F.binary_cross_entropy_with_logits(boundary_logits, target_boundary)
+        pos_weight = None
+        if self.boundary_bce_pos_weight > 0:
+            pos_weight = torch.full(
+                (int(boundary_logits.shape[1]),),
+                float(self.boundary_bce_pos_weight),
+                dtype=boundary_logits.dtype,
+                device=boundary_logits.device,
+            )
+        bce = F.binary_cross_entropy_with_logits(
+            boundary_logits,
+            target_boundary,
+            pos_weight=pos_weight,
+        )
         dice = self._soft_dice_loss(boundary_logits, target_boundary)
         total = self.boundary_bce_weight * bce + self.boundary_dice_weight * dice
         return total, bce, dice
 
-    def forward(self, logits, label, aux_logits=None, boundary_logits=None, **batch):
+    def forward(self, logits, label, aux_logits=None, boundary_logits=None, epoch=None, **batch):
         output = super().forward(logits=logits, label=label, aux_logits=aux_logits, **batch)
 
         boundary_total = logits.new_tensor(0.0)
         boundary_bce = logits.new_tensor(0.0)
         boundary_dice = logits.new_tensor(0.0)
-        if boundary_logits is not None and self.boundary_loss_weight > 0.0:
+        current_epoch = int(epoch) if epoch is not None else 0
+        boundary_enabled = current_epoch >= self.boundary_start_epoch
+        if (
+            boundary_enabled
+            and boundary_logits is not None
+            and self.boundary_loss_weight > 0.0
+        ):
             boundary_total, boundary_bce, boundary_dice = self._boundary_loss(
                 boundary_logits=boundary_logits,
                 label=label,

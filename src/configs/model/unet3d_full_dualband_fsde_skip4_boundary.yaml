@@ -15,3 +15,4 @@ fsde_use_norm_act: true
 boundary_skip_index: 4
 boundary_mid_channels: 32
 boundary_out_channels: 1
+boundary_head_eval: true

@@ -59,9 +59,15 @@ class Trainer(BaseTrainer):
             inputs=image,
             roi_size=roi_size,
             sw_batch_size=sw_batch_size,
-            predictor=lambda x: model(image=x)["logits"],
+            predictor=lambda x: model(image=x),
             overlap=overlap,
         )
+        if isinstance(logits, dict):
+            if "logits" not in logits:
+                raise ValueError(
+                    "Sliding-window predictor must return dict containing key 'logits'."
+                )
+            return logits
         return {"logits": logits}
 
     @staticmethod
@@ -179,6 +185,8 @@ class Trainer(BaseTrainer):
             dtype=self.amp_dtype,
             enabled=self.amp_enabled,
         ):
+            # Expose epoch index to criterion for staged losses.
+            batch["epoch"] = int(getattr(self, "_last_epoch", 0))
             model_outputs = self._forward_model(batch)
             batch.update(model_outputs)
             all_losses = self.criterion(**batch)

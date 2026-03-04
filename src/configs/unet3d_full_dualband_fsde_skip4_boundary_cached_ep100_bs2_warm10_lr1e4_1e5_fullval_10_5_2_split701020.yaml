@@ -11,11 +11,13 @@ loss_function:
   alpha: null
   deep_supervision: true
   deep_supervision_weights: [0.5, 0.25]
-  boundary_loss_weight: 0.1
+  boundary_loss_weight: 0.03
   boundary_bce_weight: 1.0
   boundary_dice_weight: 1.0
+  boundary_bce_pos_weight: 3.0
   boundary_radius: 1
-  boundary_channel_index: 1
+  boundary_channel_index: 2
+  boundary_start_epoch: 51
 
 optimizer:
   lr: 1e-4
