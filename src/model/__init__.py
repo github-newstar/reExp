@@ -53,6 +53,7 @@ from src.model.unetr import UNETR3D
 from src.model.unet3d import (
     UNet3D,
     UNet3DDualRouteFSDEGN,
+    UNet3DDualRouteFSDEGNSkip4FSDE,
     UNet3DFullDualBandFSDE34,
     UNet3DFullDualBandFSDE34Boundary,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "UNETR3D",
     "UNet3D",
     "UNet3DDualRouteFSDEGN",
+    "UNet3DDualRouteFSDEGNSkip4FSDE",
     "UNet3DFullDualBandFSDE34",
     "UNet3DFullDualBandFSDE34Boundary",
 ]

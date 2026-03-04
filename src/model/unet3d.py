@@ -612,3 +612,54 @@ class UNet3DDualRouteFSDEGN(nn.Module):
         info += f"\nAll parameters: {all_parameters}"
         info += f"\nTrainable parameters: {trainable_parameters}"
         return info
+
+
+class UNet3DDualRouteFSDEGNSkip4FSDE(UNet3DDualRouteFSDEGN):
+    """
+    Ablation variant of UNet3DDualRouteFSDEGN:
+    add one extra FSDE refinement on skip4 feature before decoder stage4 fusion.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            channels=channels,
+            gn_groups=gn_groups,
+            fsde_alpha=fsde_alpha,
+            fsde_alpha_max=fsde_alpha_max,
+            freq_kernel_size=freq_kernel_size,
+        )
+        c4 = int(channels[3])
+        self.skip4_refine = DualRouteFSDEBlock3D(
+            in_channels=c4,
+            out_channels=c4,
+            gn_groups=gn_groups,
+            alpha=fsde_alpha,
+            alpha_max=fsde_alpha_max,
+            freq_kernel_size=freq_kernel_size,
+        )
+
+    def forward(self, image, **batch):
+        e1 = self.enc1(image)
+        e2 = self.enc2(self.down1(e1))
+        e3 = self.enc3(self.down2(e2))
+        e4 = self.enc4(self.down3(e3))
+        b = self.bottleneck(self.down4(e4))
+
+        e4_skip = self.skip4_refine(e4)
+        d4 = self.dec4(self._concat_skip(self.up4(b), e4_skip))
+        d3 = self.dec3(self._concat_skip(self.up3(d4), e3))
+        d2 = self.dec2(self._concat_skip(self.up2(d3), e2))
+        d1 = self.dec1(self._concat_skip(self.up1(d2), e1))
+        logits = self.head(d1)
+        return {"logits": logits}
