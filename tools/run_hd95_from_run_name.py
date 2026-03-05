@@ -21,9 +21,12 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+from scipy.ndimage import label as cc_label
+from tqdm.auto import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -31,6 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.datasets.data_utils import get_dataloaders
 from src.logger import NullWriter
+from src.metrics.tracker import MetricTracker
 from src.trainer import Trainer
 from src.utils.io_utils import ROOT_PATH
 from src.utils.monai_compat import patch_monai_numpy_dtype_compat
@@ -115,6 +119,97 @@ def _ensure_test_dataset_cfg(config) -> None:
         test_cfg.instance_transforms = config.transforms.instance_transforms.inference
 
 
+_STRUCT26 = np.ones((3, 3, 3), dtype=np.uint8)
+
+
+def _count_cc_and_fragment_ratio(mask: np.ndarray) -> tuple[int, float]:
+    """
+    mask: bool ndarray [D,H,W]
+    returns:
+      - number of connected components (26-connectivity)
+      - fragment voxel ratio outside largest component
+    """
+    labeled, n_cc = cc_label(mask.astype(np.uint8), structure=_STRUCT26)
+    if n_cc <= 0:
+        return 0, 0.0
+    sizes = np.bincount(labeled.ravel())[1:]  # drop background 0
+    if sizes.size == 0:
+        return int(n_cc), 0.0
+    total = int(sizes.sum())
+    largest = int(sizes.max())
+    frag_ratio = float((total - largest) / max(total, 1))
+    return int(n_cc), frag_ratio
+
+
+def _summary_stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "median": 0.0, "max": 0.0}
+    arr = np.asarray(values, dtype=np.float64)
+    return {
+        "mean": float(np.mean(arr)),
+        "median": float(np.median(arr)),
+        "max": float(np.max(arr)),
+    }
+
+
+def _evaluate_with_cc_fragment_stats(
+    trainer: Trainer,
+    dataloader,
+    part: str,
+    pred_threshold: float = 0.5,
+):
+    trainer.is_train = False
+    trainer.current_eval_mode = "full"
+    trainer.current_eval_quick_cfg = {}
+    trainer.model.eval()
+
+    metric_funcs = trainer.metrics["inference"]
+    metrics_tracker = MetricTracker(
+        *trainer.config.writer.loss_names,
+        *[m.name for m in metric_funcs],
+        writer=None,
+    )
+
+    cc_counts: dict[str, list[float]] = {"TC": [], "WT": [], "ET": []}
+    frag_ratios: dict[str, list[float]] = {"TC": [], "WT": [], "ET": []}
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc=f"{part}:full", total=len(dataloader)):
+            batch = trainer.process_batch(batch=batch, metrics=metrics_tracker)
+            logits = batch["logits"]
+            probs = torch.sigmoid(logits)
+            pred = (probs > float(pred_threshold)).detach().cpu().numpy().astype(np.uint8)
+
+            num_channels = pred.shape[1]
+            for b in range(pred.shape[0]):
+                if num_channels > 0:
+                    n_cc, frag = _count_cc_and_fragment_ratio(pred[b, 0].astype(bool))
+                    cc_counts["TC"].append(float(n_cc))
+                    frag_ratios["TC"].append(float(frag))
+                if num_channels > 1:
+                    n_cc, frag = _count_cc_and_fragment_ratio(pred[b, 1].astype(bool))
+                    cc_counts["WT"].append(float(n_cc))
+                    frag_ratios["WT"].append(float(frag))
+                if num_channels > 2:
+                    n_cc, frag = _count_cc_and_fragment_ratio(pred[b, 2].astype(bool))
+                    cc_counts["ET"].append(float(n_cc))
+                    frag_ratios["ET"].append(float(frag))
+
+    logs = metrics_tracker.result()
+    for region_name in ("TC", "WT", "ET"):
+        cc_stats = _summary_stats(cc_counts[region_name])
+        frag_stats = _summary_stats(frag_ratios[region_name])
+        for key, value in cc_stats.items():
+            logs[f"CCCount_{region_name}_{key}"] = float(value)
+        for key, value in frag_stats.items():
+            logs[f"FragRatio_{region_name}_{key}"] = float(value)
+
+    logs["CCFrag_case_count"] = float(
+        max(len(cc_counts["TC"]), len(cc_counts["WT"]), len(cc_counts["ET"]))
+    )
+    return logs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run HD95 full evaluation for saved/<run_name>."
@@ -157,10 +252,18 @@ def main() -> None:
         default=None,
         help="Optional output json path. Default: print-only.",
     )
+    parser.add_argument(
+        "--pred-threshold",
+        type=float,
+        default=0.5,
+        help="Sigmoid threshold for binary prediction when computing CC/fragment stats (default: 0.5).",
+    )
     args = parser.parse_args()
 
     if not (0.0 < float(args.usage_ratio) <= 1.0):
         raise ValueError(f"--usage-ratio must be in (0, 1], got {args.usage_ratio}")
+    if not (0.0 < float(args.pred_threshold) < 1.0):
+        raise ValueError(f"--pred-threshold must be in (0, 1), got {args.pred_threshold}")
 
     run_dir = ROOT_PATH / args.save_root / args.run_name
     config_path = run_dir / "config.yaml"
@@ -269,12 +372,11 @@ def main() -> None:
     state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
     trainer._model_for_state_dict().load_state_dict(state_dict)
 
-    logs = trainer._evaluation_epoch(
-        epoch=0,
-        part=str(args.partition),
+    logs = _evaluate_with_cc_fragment_stats(
+        trainer=trainer,
         dataloader=dataloaders[str(args.partition)],
-        eval_mode="full",
-        max_batches=None,
+        part=str(args.partition),
+        pred_threshold=float(args.pred_threshold),
     )
 
     print("\n=== HD95 Evaluation Results ===")
@@ -295,6 +397,7 @@ def main() -> None:
             "partition": args.partition,
             "checkpoint": str(checkpoint_path),
             "usage_ratio": float(args.usage_ratio),
+            "pred_threshold": float(args.pred_threshold),
             "metrics_config": str(metrics_cfg_path),
             "logs": {k: float(v) if isinstance(v, (int, float)) else v for k, v in logs.items()},
         }

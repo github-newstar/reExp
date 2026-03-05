@@ -29,10 +29,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence
 
+import numpy as np
 import torch
 from hydra.utils import instantiate
 from monai.inferers import sliding_window_inference
 from omegaconf import OmegaConf
+from scipy.ndimage import label as cc_label
 from torch.utils.data import DataLoader, Subset
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +124,33 @@ def _ensure_test_dataset_cfg(config) -> None:
         test_cfg.instance_transforms = config.transforms.instance_transforms.inference
 
 
+_STRUCT26 = np.ones((3, 3, 3), dtype=np.uint8)
+
+
+def _count_cc_and_fragment_ratio(mask: np.ndarray) -> tuple[int, float]:
+    labeled, n_cc = cc_label(mask.astype(np.uint8), structure=_STRUCT26)
+    if n_cc <= 0:
+        return 0, 0.0
+    sizes = np.bincount(labeled.ravel())[1:]
+    if sizes.size == 0:
+        return int(n_cc), 0.0
+    total = int(sizes.sum())
+    largest = int(sizes.max())
+    frag_ratio = float((total - largest) / max(total, 1))
+    return int(n_cc), frag_ratio
+
+
+def _summary_stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "median": 0.0, "max": 0.0}
+    arr = np.asarray(values, dtype=np.float64)
+    return {
+        "mean": float(np.mean(arr)),
+        "median": float(np.median(arr)),
+        "max": float(np.max(arr)),
+    }
+
+
 def _transform_batch(batch: dict, batch_transforms: dict) -> dict:
     transforms = batch_transforms.get("inference") if batch_transforms is not None else None
     if transforms is None:
@@ -199,6 +228,8 @@ class WorkerResult:
     n_batches: int
     totals: Dict[str, float]
     counts: Dict[str, float]
+    cc_counts: Dict[str, List[float]]
+    frag_ratios: Dict[str, List[float]]
 
 
 def _worker_main(
@@ -214,6 +245,7 @@ def _worker_main(
     sw_overlap: float,
     eval_batch_size: int,
     loader_workers_per_proc: int,
+    pred_threshold: float,
     output_queue,
 ) -> None:
     try:
@@ -273,6 +305,8 @@ def _worker_main(
         metrics = instantiate(config.metrics)
         inference_metrics = metrics["inference"]
         tracker = MetricTracker(*[m.name for m in inference_metrics], writer=None)
+        cc_counts: Dict[str, List[float]] = {"TC": [], "WT": [], "ET": []}
+        frag_ratios: Dict[str, List[float]] = {"TC": [], "WT": [], "ET": []}
 
         n_batches = 0
         with torch.no_grad():
@@ -299,6 +333,22 @@ def _worker_main(
                     raise ValueError("Model output must be dict with key 'logits'.")
 
                 batch.update(outputs)
+                probs = torch.sigmoid(batch["logits"])
+                pred = (probs > float(pred_threshold)).detach().cpu().numpy().astype(np.uint8)
+                num_channels = pred.shape[1]
+                for b in range(pred.shape[0]):
+                    if num_channels > 0:
+                        n_cc, frag = _count_cc_and_fragment_ratio(pred[b, 0].astype(bool))
+                        cc_counts["TC"].append(float(n_cc))
+                        frag_ratios["TC"].append(float(frag))
+                    if num_channels > 1:
+                        n_cc, frag = _count_cc_and_fragment_ratio(pred[b, 1].astype(bool))
+                        cc_counts["WT"].append(float(n_cc))
+                        frag_ratios["WT"].append(float(frag))
+                    if num_channels > 2:
+                        n_cc, frag = _count_cc_and_fragment_ratio(pred[b, 2].astype(bool))
+                        cc_counts["ET"].append(float(n_cc))
+                        frag_ratios["ET"].append(float(frag))
                 for met in inference_metrics:
                     tracker.update(met.name, met(**batch))
 
@@ -311,6 +361,8 @@ def _worker_main(
                 n_batches=int(n_batches),
                 totals=totals,
                 counts=counts,
+                cc_counts=cc_counts,
+                frag_ratios=frag_ratios,
             )
         )
     except Exception as error:  # pragma: no cover - pass full error to main proc
@@ -343,6 +395,12 @@ def main() -> None:
         help="DataLoader workers inside each eval process (default: 0).",
     )
     parser.add_argument(
+        "--pred-threshold",
+        type=float,
+        default=0.5,
+        help="Sigmoid threshold for binary prediction when computing CC/fragment stats (default: 0.5).",
+    )
+    parser.add_argument(
         "--eval-batch-size",
         type=int,
         default=None,
@@ -362,6 +420,8 @@ def main() -> None:
         raise ValueError(f"--usage-ratio must be in (0, 1], got {args.usage_ratio}")
     if int(args.nprocs) < 1:
         raise ValueError(f"--nprocs must be >= 1, got {args.nprocs}")
+    if not (0.0 < float(args.pred_threshold) < 1.0):
+        raise ValueError(f"--pred-threshold must be in (0, 1), got {args.pred_threshold}")
 
     run_dir = ROOT_PATH / args.save_root / args.run_name
     config_path = run_dir / "config.yaml"
@@ -498,6 +558,7 @@ def main() -> None:
                 float(sw_overlap),
                 int(eval_batch_size),
                 int(args.loader_workers_per_proc),
+                float(args.pred_threshold),
                 queue,
             ),
         )
@@ -530,17 +591,36 @@ def main() -> None:
 
     total_cases = 0
     total_batches = 0
+    agg_cc_counts: Dict[str, List[float]] = {"TC": [], "WT": [], "ET": []}
+    agg_frag_ratios: Dict[str, List[float]] = {"TC": [], "WT": [], "ET": []}
     for item in results:
         total_cases += int(item.n_cases)
         total_batches += int(item.n_batches)
         for k in metric_keys:
             agg_totals[k] += float(item.totals.get(k, 0.0))
             agg_counts[k] += float(item.counts.get(k, 0.0))
+        for region_name in ("TC", "WT", "ET"):
+            agg_cc_counts[region_name].extend(item.cc_counts.get(region_name, []))
+            agg_frag_ratios[region_name].extend(item.frag_ratios.get(region_name, []))
 
     logs = {
         k: (agg_totals[k] / agg_counts[k] if agg_counts[k] > 0.0 else 0.0)
         for k in metric_keys
     }
+    for region_name in ("TC", "WT", "ET"):
+        cc_stats = _summary_stats(agg_cc_counts[region_name])
+        frag_stats = _summary_stats(agg_frag_ratios[region_name])
+        for key, value in cc_stats.items():
+            logs[f"CCCount_{region_name}_{key}"] = float(value)
+        for key, value in frag_stats.items():
+            logs[f"FragRatio_{region_name}_{key}"] = float(value)
+    logs["CCFrag_case_count"] = float(
+        max(
+            len(agg_cc_counts["TC"]),
+            len(agg_cc_counts["WT"]),
+            len(agg_cc_counts["ET"]),
+        )
+    )
 
     print("\n=== Multi-Process HD95 Evaluation Results ===")
     print(f"run_name: {args.run_name}")
@@ -563,6 +643,7 @@ def main() -> None:
             "partition": args.partition,
             "checkpoint": str(checkpoint_path),
             "usage_ratio": float(args.usage_ratio),
+            "pred_threshold": float(args.pred_threshold),
             "nprocs": int(nprocs),
             "devices": worker_devices[:nprocs],
             "metrics_config": str(metrics_cfg_path),
