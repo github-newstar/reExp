@@ -438,11 +438,15 @@ class DualRouteFSDEBlock3D(nn.Module):
         alpha: float = 0.1,
         alpha_max: float = 0.3,
         freq_kernel_size: Sequence[int] = (8, 8, 8),
+        enable_spatial: bool = True,
+        enable_frequency: bool = True,
     ):
         super().__init__()
         self.in_channels = int(in_channels)
         self.out_channels = int(out_channels)
         self.alpha_max = float(alpha_max)
+        self.enable_spatial = bool(enable_spatial)
+        self.enable_frequency = bool(enable_frequency)
 
         if len(freq_kernel_size) != 3:
             raise ValueError(
@@ -501,26 +505,33 @@ class DualRouteFSDEBlock3D(nn.Module):
         return torch.clamp(value, 0.0, self.alpha_max)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        spatial = self.spatial(x)
+        out_shape = (x.shape[0], self.out_channels, x.shape[2], x.shape[3], x.shape[4])
+        if self.enable_spatial:
+            spatial = self.spatial(x)
+        else:
+            spatial = x.new_zeros(out_shape)
 
-        freq_feat = self.freq_proj(x).float()
-        spectrum = torch.fft.rfftn(freq_feat, dim=(2, 3, 4))
-        _, _, d_f, h_f, w_f = spectrum.shape
-        target_shape = (d_f, h_f, w_f)
+        if self.enable_frequency:
+            freq_feat = self.freq_proj(x).float()
+            spectrum = torch.fft.rfftn(freq_feat, dim=(2, 3, 4))
+            _, _, d_f, h_f, w_f = spectrum.shape
+            target_shape = (d_f, h_f, w_f)
 
-        w_lf = self._resize_freq_weight(self.weight_lf, target_shape)
-        w_hf = self._resize_freq_weight(self.weight_hf, target_shape)
-        alpha = self._alpha_value(dtype=w_lf.dtype, device=w_lf.device)
-        m_lf = 1.0 + alpha * torch.tanh(w_lf)
-        m_hf = 1.0 + alpha * torch.tanh(w_hf)
+            w_lf = self._resize_freq_weight(self.weight_lf, target_shape)
+            w_hf = self._resize_freq_weight(self.weight_hf, target_shape)
+            alpha = self._alpha_value(dtype=w_lf.dtype, device=w_lf.device)
+            m_lf = 1.0 + alpha * torch.tanh(w_lf)
+            m_hf = 1.0 + alpha * torch.tanh(w_hf)
 
-        y_lf = torch.fft.irfftn(spectrum * m_lf, s=freq_feat.shape[2:], dim=(2, 3, 4))
-        y_hf = torch.fft.irfftn(spectrum * m_hf, s=freq_feat.shape[2:], dim=(2, 3, 4))
-        y_lf = y_lf.to(dtype=x.dtype)
-        y_hf = y_hf.to(dtype=x.dtype)
+            y_lf = torch.fft.irfftn(spectrum * m_lf, s=freq_feat.shape[2:], dim=(2, 3, 4))
+            y_hf = torch.fft.irfftn(spectrum * m_hf, s=freq_feat.shape[2:], dim=(2, 3, 4))
+            y_lf = y_lf.to(dtype=x.dtype)
+            y_hf = y_hf.to(dtype=x.dtype)
 
-        gate = self.sigmoid(self.mix_gate(torch.cat([y_lf, y_hf], dim=1)))
-        frequency = gate * y_hf + (1.0 - gate) * y_lf
+            gate = self.sigmoid(self.mix_gate(torch.cat([y_lf, y_hf], dim=1)))
+            frequency = gate * y_hf + (1.0 - gate) * y_lf
+        else:
+            frequency = x.new_zeros(out_shape)
 
         fused = self.fuse(torch.cat([spatial, frequency], dim=1))
         out = fused + self.residual(x)
@@ -659,6 +670,8 @@ class UNet3DDualRouteFSDEGN(nn.Module):
         fsde_alpha: float = 0.1,
         fsde_alpha_max: float = 0.3,
         freq_kernel_size: Sequence[int] = (8, 8, 8),
+        fsde_enable_spatial: bool = True,
+        fsde_enable_frequency: bool = True,
     ):
         super().__init__()
         if len(channels) != 5:
@@ -672,25 +685,99 @@ class UNet3DDualRouteFSDEGN(nn.Module):
             alpha=fsde_alpha,
             alpha_max=fsde_alpha_max,
             freq_kernel_size=freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
         )
         self.down1 = nn.Conv3d(c1, c2, kernel_size=2, stride=2, bias=False)
-        self.enc2 = DualRouteFSDEBlock3D(c2, c2, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.enc2 = DualRouteFSDEBlock3D(
+            c2,
+            c2,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
         self.down2 = nn.Conv3d(c2, c3, kernel_size=2, stride=2, bias=False)
-        self.enc3 = DualRouteFSDEBlock3D(c3, c3, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.enc3 = DualRouteFSDEBlock3D(
+            c3,
+            c3,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
         self.down3 = nn.Conv3d(c3, c4, kernel_size=2, stride=2, bias=False)
-        self.enc4 = DualRouteFSDEBlock3D(c4, c4, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.enc4 = DualRouteFSDEBlock3D(
+            c4,
+            c4,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
         self.down4 = nn.Conv3d(c4, c5, kernel_size=2, stride=2, bias=False)
 
-        self.bottleneck = DualRouteFSDEBlock3D(c5, c5, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.bottleneck = DualRouteFSDEBlock3D(
+            c5,
+            c5,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
 
         self.up4 = nn.ConvTranspose3d(c5, c4, kernel_size=2, stride=2)
-        self.dec4 = DualRouteFSDEBlock3D(c4 + c4, c4, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.dec4 = DualRouteFSDEBlock3D(
+            c4 + c4,
+            c4,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
         self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
-        self.dec3 = DualRouteFSDEBlock3D(c3 + c3, c3, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.dec3 = DualRouteFSDEBlock3D(
+            c3 + c3,
+            c3,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
         self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
-        self.dec2 = DualRouteFSDEBlock3D(c2 + c2, c2, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.dec2 = DualRouteFSDEBlock3D(
+            c2 + c2,
+            c2,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
         self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
-        self.dec1 = DualRouteFSDEBlock3D(c1 + c1, c1, gn_groups, fsde_alpha, fsde_alpha_max, freq_kernel_size)
+        self.dec1 = DualRouteFSDEBlock3D(
+            c1 + c1,
+            c1,
+            gn_groups,
+            fsde_alpha,
+            fsde_alpha_max,
+            freq_kernel_size,
+            enable_spatial=fsde_enable_spatial,
+            enable_frequency=fsde_enable_frequency,
+        )
 
         self.head = nn.Conv3d(c1, out_channels, kernel_size=1, bias=True)
 
@@ -728,6 +815,64 @@ class UNet3DDualRouteFSDEGN(nn.Module):
         info += f"\nAll parameters: {all_parameters}"
         info += f"\nTrainable parameters: {trainable_parameters}"
         return info
+
+
+class UNet3DDualRouteFSDEGNNoFrequency(UNet3DDualRouteFSDEGN):
+    """
+    All encoder/decoder/bottleneck FSDE blocks with frequency route disabled.
+    Disabled frequency route outputs zeros.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            channels=channels,
+            gn_groups=gn_groups,
+            fsde_alpha=fsde_alpha,
+            fsde_alpha_max=fsde_alpha_max,
+            freq_kernel_size=freq_kernel_size,
+            fsde_enable_spatial=True,
+            fsde_enable_frequency=False,
+        )
+
+
+class UNet3DDualRouteFSDEGNNoSpatial(UNet3DDualRouteFSDEGN):
+    """
+    All encoder/decoder/bottleneck FSDE blocks with spatial route disabled.
+    Disabled spatial route outputs zeros.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 3,
+        channels: tuple[int, int, int, int, int] = (32, 64, 128, 256, 512),
+        gn_groups: int = 8,
+        fsde_alpha: float = 0.1,
+        fsde_alpha_max: float = 0.3,
+        freq_kernel_size: Sequence[int] = (8, 8, 8),
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            channels=channels,
+            gn_groups=gn_groups,
+            fsde_alpha=fsde_alpha,
+            fsde_alpha_max=fsde_alpha_max,
+            freq_kernel_size=freq_kernel_size,
+            fsde_enable_spatial=False,
+            fsde_enable_frequency=True,
+        )
 
 
 class UNet3DDualRouteFSDEGNSkip4FSDE(UNet3DDualRouteFSDEGN):
