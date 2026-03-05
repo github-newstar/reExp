@@ -1,0 +1,24 @@
+defaults:
+  - unet3d_dualroute_fsde_dwt_bottleneck_gn_cached_ep100_bs2_warm10_lr1e4_1e5_fullval_10_5_2
+  - override model: unet3d_dualroute_fsde_dwt_bottleneck_gn_skip4fsde
+  - _self_
+
+writer:
+  run_name: unet3d_dualroute_fsde_dwt_bottleneck_gn_skip4fsde_ep100_bs2_warm10_lr1e4_to_1e5_fullval_10_5_2_split701020
+
+datasets:
+  train:
+    usage_ratio: 1.0
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  val:
+    usage_ratio: 1.0
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2
+  test:
+    usage_ratio: 1.0
+    split_strategy: "three_way"
+    val_ratio: 0.1
+    test_ratio: 0.2

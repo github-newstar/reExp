@@ -53,6 +53,7 @@ from src.model.unetr import UNETR3D
 from src.model.unet3d import (
     UNet3D,
     UNet3DDualRouteFSDEDWTBottleneckGN,
+    UNet3DDualRouteFSDEDWTBottleneckGNSkip4FSDE,
     UNet3DBottleneckDualRouteFSDEGN,
     UNet3DSkip2DualRouteFSDEGN,
     UNet3DDecoderDualRouteFSDEGN,
@@ -114,6 +115,7 @@ __all__ = [
     "UNETR3D",
     "UNet3D",
     "UNet3DDualRouteFSDEDWTBottleneckGN",
+    "UNet3DDualRouteFSDEDWTBottleneckGNSkip4FSDE",
     "UNet3DBottleneckDualRouteFSDEGN",
     "UNet3DSkip2DualRouteFSDEGN",
     "UNet3DDecoderDualRouteFSDEGN",
